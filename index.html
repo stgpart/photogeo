@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex, nofollow">
+<meta name="theme-color" content="#000000">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="PhotoGeo">
+<title>PhotoGeo</title>
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icons/icon-180.png">
+<link rel="icon" type="image/png" href="icons/icon-192.png">
+<link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<!-- Sign-in / setup screen -->
+<div id="signin" class="screen hidden">
+  <div class="signin-card">
+    <img src="icons/icon-192.png" alt="" class="signin-logo">
+    <h1>PhotoGeo</h1>
+    <p class="muted">Your shooting-location journal</p>
+    <button id="btnSignIn" class="btn primary big">Sign in with Google</button>
+    <p id="setupNote" class="setup-note hidden">PhotoGeo isn't connected to Firebase yet. Fill in the config at the top of <code>app.js</code> (see SETUP.md).</p>
+  </div>
+</div>
+
+<!-- Main app -->
+<div id="app" class="hidden">
+  <div id="map"></div>
+
+  <header class="topbar">
+    <div class="brand">PhotoGeo</div>
+    <div class="topbar-actions">
+      <button id="btnLayer" class="chip" title="Switch map style">🛰 Satellite</button>
+      <button id="btnAccount" class="avatar" title="Account">?</button>
+    </div>
+  </header>
+
+  <div id="banner" class="banner hidden">
+    <span id="bannerText"></span>
+    <button id="bannerBtn" class="btn small primary">Connect</button>
+  </div>
+
+  <!-- Place-a-spot mode -->
+  <div id="crosshair" aria-hidden="true"></div>
+  <div id="placeBar" class="place-bar">
+    <span id="placeText">Move the map to put the pin on the spot</span>
+    <div class="place-btns">
+      <button id="placeCancel" class="btn small">Cancel</button>
+      <button id="placeConfirm" class="btn small primary">Save here</button>
+    </div>
+  </div>
+
+  <nav class="bottombar">
+    <button id="btnList" class="tool" title="All spots"><span>☰</span><small>Spots</small></button>
+    <button id="btnAddSpot" class="tool" title="Add a spot by hand"><span>📍</span><small>Pin</small></button>
+    <button id="btnAddPhoto" class="fab">📷 Add photo</button>
+    <button id="btn3d" class="tool" title="3D terrain"><span>⛰</span><small>3D</small></button>
+    <button id="btnLocate" class="tool" title="My location"><span>◎</span><small>Me</small></button>
+  </nav>
+
+  <!-- Spot sheet -->
+  <section id="sheet" class="sheet hidden" aria-label="Spot details">
+    <div class="sheet-handle"></div>
+    <div class="sheet-head">
+      <div class="sheet-title">
+        <h2 id="spotName"></h2>
+        <button id="spotCoords" class="coords" title="Copy coordinates"></button>
+      </div>
+      <button id="sheetClose" class="icon-btn" title="Close">✕</button>
+    </div>
+    <div class="sheet-actions">
+      <a id="spotDirections" class="btn small" target="_blank" rel="noopener">🧭 Directions</a>
+      <button id="spotAddPhoto" class="btn small primary">📷 Add photo here</button>
+      <button id="spotMore" class="btn small">⋯</button>
+    </div>
+    <label class="field-label" for="spotNotes">Notes</label>
+    <textarea id="spotNotes" rows="3" placeholder="Parking, access, best angles, tide, crowds…"></textarea>
+    <div class="grid-head"><span id="spotCount"></span></div>
+    <div id="spotGrid" class="photo-grid"></div>
+  </section>
+
+  <!-- Spot list -->
+  <section id="listSheet" class="sheet tall hidden" aria-label="All spots">
+    <div class="sheet-handle"></div>
+    <div class="sheet-head">
+      <h2>Spots</h2>
+      <button id="listClose" class="icon-btn" title="Close">✕</button>
+    </div>
+    <input id="listSearch" type="search" placeholder="Search spots and notes">
+    <div id="listItems" class="list"></div>
+  </section>
+
+  <!-- Photo viewer -->
+  <div id="viewer" class="viewer hidden">
+    <button id="viewerClose" class="icon-btn viewer-close" title="Close">✕</button>
+    <div class="viewer-img-wrap"><img id="viewerImg" alt=""></div>
+    <div class="viewer-info">
+      <button id="viewerLoad" class="btn small primary hidden">Load full size from Google Drive</button>
+      <div id="viewerMeta"></div>
+      <button id="viewerDelete" class="btn small danger">Delete photo</button>
+    </div>
+  </div>
+
+  <input type="file" id="fileInput" accept="image/*" multiple hidden>
+</div>
+
+<div id="dialog" class="dialog hidden"></div>
+<div id="toast" class="toast" role="status"></div>
+
+<script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/exifr@7.1.3/dist/full.umd.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore-compat.js"></script>
+<script src="https://accounts.google.com/gsi/client" async defer></script>
+<script src="app.js"></script>
+</body>
+</html>

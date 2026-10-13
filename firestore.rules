@@ -1,0 +1,12 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Only the owner account can read or write, and only its own data.
+    match /users/{uid}/{document=**} {
+      allow read, write: if request.auth != null
+        && request.auth.uid == uid
+        && request.auth.token.email == 'stgp.art@gmail.com'
+        && request.auth.token.email_verified == true;
+    }
+  }
+}

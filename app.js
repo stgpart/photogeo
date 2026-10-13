@@ -264,7 +264,7 @@ function fitToSpots() {
   if (arr.length === 1) { map.jumpTo({ center: [arr[0].lng, arr[0].lat], zoom: 14 }); return; }
   const b = new maplibregl.LngLatBounds();
   arr.forEach(s => b.extend([s.lng, s.lat]));
-  map.fitBounds(b, { padding: 70, maxZoom: 15, duration: 0 });
+  map.fitBounds(b, { padding: { top: 90, bottom: 140, left: 50, right: 70 }, maxZoom: 15, duration: 0 });
 }
 
 function spotPhotos(spotId) {

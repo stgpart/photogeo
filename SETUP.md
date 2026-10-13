@@ -31,7 +31,7 @@ Go to https://console.cloud.google.com and make sure the project selector at the
 
 ## 5. GitHub Pages
 1. Create a public repo named `photogeo` on the chosen GitHub account.
-2. Upload all files at the repo root: `index.html`, `app.js`, `styles.css`, `sw.js`, `manifest.json`, and the `icons/` folder. Commit to `main`.
+2. Upload all files at the repo root: `index.html`, `app.js`, `styles.css`, `sw.js`, `manifest.json`, and the icon PNGs folder. Commit to `main`.
 3. Go to **Settings → Pages**. Set Source to "Deploy from a branch", choose `main` and `/ (root)`, then click **Save**.
 4. After about a minute, the app is live at `https://stgpart.github.io/photogeo/`.
 

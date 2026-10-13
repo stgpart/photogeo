@@ -2,7 +2,7 @@
 // Bump CACHE_NAME whenever this file changes.
 const CACHE_NAME = 'photogeo-v1';
 const SHELL = ['./', './index.html', './app.js', './styles.css', './manifest.json',
-  './icons/icon-180.png', './icons/icon-192.png', './icons/icon-512.png'];
+  './icon-180.png', './icon-192.png', './icon-512.png'];
 
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(CACHE_NAME).then(c => c.addAll(SHELL)).then(() => self.skipWaiting()));

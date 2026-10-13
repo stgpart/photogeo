@@ -7,7 +7,7 @@ PhotoGeo is a personal photography location journal for Cristina, built as a sin
 It has an interactive map of shooting spots. Each spot holds photos, notes, and coordinates, and she uses it to plan upcoming shoots.
 - **Owner account:** stgp.art@gmail.com. That account handles Google sign-in, Firebase, and Drive. The app and the Firestore rules refuse any other account.
 - **Privacy:** spots must stay private. Don't publish locations anywhere, and leave `<meta name="robots" content="noindex">` in place.
-- **Stack:** plain HTML/CSS/JS with no build step, the same as the yaoi journal. Files: `index.html`, `app.js`, `styles.css`, `sw.js`, `manifest.json`, `icons/`.
+- **Stack:** plain HTML/CSS/JS with no build step, the same as the yaoi journal. Files: `index.html`, `app.js`, `styles.css`, `sw.js`, `manifest.json`, icon PNGs.
 - **Live site:** https://stgpart.github.io/photogeo/ (repo github.com/stgpart/photogeo, GitHub account stgpart, under stgp.art@gmail.com)
 - **Deploy:** upload changed files through GitHub's web upload, commit to `main`, and GitHub Pages auto-deploys. Run `node --check app.js` before pushing.
   If `sw.js` changes, bump its `CACHE_NAME` (currently `photogeo-v1`).

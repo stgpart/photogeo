@@ -36,12 +36,30 @@
   <header class="topbar">
     <div class="brand">PhotoGeo</div>
     <div class="topbar-actions">
+      <button id="btnSearch" class="chip" title="Search an address">⌕ Search</button>
       <button id="btnLayer" class="chip" title="Map layers">◫ Layers</button>
       <button id="btnAccount" class="avatar" title="Account">?</button>
     </div>
   </header>
 
-  <button id="filterPill" class="filter-pill hidden" title="Show all spots"><span class="p-mini">P</span> Parking only ✕</button>
+  <button id="filterPill" class="filter-pill hidden" title="Show all spots"></button>
+
+  <!-- Address search -->
+  <div id="searchBar" class="search-bar hidden">
+    <div class="search-row">
+      <input id="searchInput" type="search" placeholder="Address, place, or 36.52, -121.92" autocomplete="off" enterkeyhint="search">
+      <button id="searchClose" class="icon-btn" title="Close">✕</button>
+    </div>
+    <div id="searchResults" class="search-results"></div>
+  </div>
+  <div id="searchCard" class="search-card hidden">
+    <div class="sc-text"><b id="searchCardName"></b><small id="searchCardDetail"></small></div>
+    <div class="sc-btns">
+      <button id="searchDismiss" class="btn small">Close</button>
+      <button id="searchAdjust" class="btn small">Adjust pin</button>
+      <button id="searchSave" class="btn small primary">Save as spot</button>
+    </div>
+  </div>
 
   <div id="banner" class="banner hidden">
     <span id="bannerText"></span>

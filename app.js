@@ -142,8 +142,16 @@ let unsubSpots = null, unsubPhotos = null, metaRef = null;
 let currentSpotId = null;
 let placing = null;        // null | {mode:'new'} | {mode:'move', spotId}
 let is3D = false, baseLayer = 'satellite', didInitialFit = false, photosLoaded = false;
-let listFilter = 'all';     // 'all' | 'parking'
-try { if (localStorage.getItem('pg_filter') === 'parking') listFilter = 'parking'; } catch {}
+let listFilter = 'all';     // 'all' | a CATEGORIES key. Resets each launch so pins never stay hidden by surprise.
+try { localStorage.removeItem('pg_filter'); } catch {}
+// Utility categories (one per spot). Add more here later.
+const CATEGORIES = {
+  parking:  { label: 'Parking',  plural: 'Parking',   badge: 'P',  color: '#1e6fff' },
+  bathroom: { label: 'Bathroom', plural: 'Bathrooms', badge: 'WC', color: '#00a88f' },
+};
+const catOf = s => (s && CATEGORIES[s.category]) ? s.category : null;
+const catBadge = (c, cls = 'p-badge') => `<span class="${cls}" style="background:${CATEGORIES[c].color}">${CATEGORIES[c].badge}</span>`;
+const hiddenByFilter = s => listFilter !== 'all' && catOf(s) !== listFilter;
 
 // ===================== Firebase / auth =====================
 function initFirebase() {
@@ -287,16 +295,16 @@ function renderMarkers() {
   for (const [id, m] of markers) if (!spots.has(id)) { m.remove(); markers.delete(id); }
   for (const s of spots.values()) {
     const cover = spotPhotos(s.id)[0];
-    const parking = s.category === 'parking';
-    const key = `${cover ? cover.id : '-'}|${s.lat}|${s.lng}|${s.name}|${parking}`;
+    const cat = catOf(s);
+    const key = `${cover ? cover.id : '-'}|${s.lat}|${s.lng}|${s.name}|${cat}`;
     let m = markers.get(s.id);
-    if (m && m._pgKey === key) { m.getElement().classList.toggle('filtered-out', listFilter === 'parking' && !parking); continue; }
+    if (m && m._pgKey === key) { m.getElement().classList.toggle('filtered-out', hiddenByFilter(s)); continue; }
     if (m) m.remove();
     const el = document.createElement('button');
-    el.className = 'marker' + (parking ? ' parking' : cover ? ' has-photo' : '');
-    if (listFilter === 'parking' && !parking) el.classList.add('filtered-out');
+    el.className = 'marker' + (cat ? ' cat' : cover ? ' has-photo' : '');
+    if (hiddenByFilter(s)) el.classList.add('filtered-out');
     el.title = s.name;
-    el.innerHTML = parking ? '<span class="p-badge">P</span>' : cover ? `<img src="${cover.thumb}" alt="">` : '<span>📍</span>';
+    el.innerHTML = cat ? catBadge(cat) : cover ? `<img src="${cover.thumb}" alt="">` : '<span>📍</span>';
     el.addEventListener('click', e => { e.stopPropagation(); openSpot(s.id); });
     m = new maplibregl.Marker({ element: el, anchor: 'bottom' }).setLngLat([s.lng, s.lat]).addTo(map);
     m._pgKey = key;
@@ -331,7 +339,8 @@ function renderSpotSheet() {
   if (!s) { closeSpot(); return; }
   $('#spotName').textContent = s.name;
   $('#spotCoords').textContent = fmtCoord(s.lat, s.lng);
-  $('#spotTags').innerHTML = (s.category === 'parking' ? '<span class="tag tag-parking">P Parking</span>' : '');
+  const sc = catOf(s);
+  $('#spotTags').innerHTML = sc ? `<span class="tag" style="background:${CATEGORIES[sc].color}">${CATEGORIES[sc].badge} ${CATEGORIES[sc].label}</span>` : '';
   $('#spotArea').innerHTML = areaHtml(s);
   if (!areaIsCurrent(s)) ensureArea(s);
   $('#spotDirections').href = `https://www.google.com/maps/dir/?api=1&destination=${s.lat},${s.lng}`;
@@ -366,7 +375,7 @@ async function spotMenu() {
   const r = await dialog({
     title: s.name, buttons: [
       { label: 'Rename', value: 'rename' },
-      { label: s.category === 'parking' ? 'Unmark as parking' : 'Mark as parking', value: 'parking' },
+      ...Object.entries(CATEGORIES).map(([k, c]) => ({ label: s.category === k ? `Unmark as ${c.label.toLowerCase()}` : `Mark as ${c.label.toLowerCase()}`, value: 'cat:' + k })),
       { label: 'Move pin', value: 'move' },
       { label: 'Delete spot', value: 'delete', cls: 'danger' },
       { label: 'Close', value: null },
@@ -375,11 +384,11 @@ async function spotMenu() {
   if (r.value === 'rename') {
     const n = await dialog({ title: 'Rename spot', input: s.name, buttons: [{ label: 'Cancel', value: false }, { label: 'Save', value: true, cls: 'primary' }] });
     if (n.value && n.text) userCol('spots').doc(s.id).update({ name: n.text, updatedAt: nowIso() });
-  } else if (r.value === 'parking') {
-    const on = s.category !== 'parking';
-    userCol('spots').doc(s.id).update({ category: on ? 'parking' : null, updatedAt: nowIso() })
+  } else if (typeof r.value === 'string' && r.value.startsWith('cat:')) {
+    const k = r.value.slice(4), on = s.category !== k, lbl = CATEGORIES[k].label.toLowerCase();
+    userCol('spots').doc(s.id).update({ category: on ? k : null, updatedAt: nowIso() })
       .catch(e => toast('Not saved: ' + e.code, 5000));
-    toast(on ? 'Marked as parking' : 'No longer marked as parking');
+    toast(on ? `Marked as ${lbl}` : `No longer marked as ${lbl}`);
   } else if (r.value === 'move') {
     startPlacing({ mode: 'move', spotId: s.id });
   } else if (r.value === 'delete') {
@@ -445,8 +454,8 @@ async function suggestName(lat, lng) {
   } catch { return 'New spot'; }
 }
 
-async function createSpot(lat, lng) {
-  const guess = await suggestName(lat, lng);
+async function createSpot(lat, lng, nameHint = null) {
+  const guess = nameHint || await suggestName(lat, lng);
   const r = await dialog({
     title: 'Name this spot', message: fmtCoord(lat, lng), input: guess,
     buttons: [{ label: 'Cancel', value: false }, { label: 'Save spot', value: true, cls: 'primary' }]
@@ -781,44 +790,131 @@ async function deleteCurrentPhoto() {
 }
 
 // ===================== Spot list =====================
-function openList() { closeSpot(); closeLayers(); renderList(); $('#listSheet').classList.remove('hidden'); }
+function openList() { closeSpot(); closeLayers(); closeSearch(); renderList(); $('#listSheet').classList.remove('hidden'); }
 function closeList() { $('#listSheet').classList.add('hidden'); }
 function renderList() {
   const q = $('#listSearch').value.trim().toLowerCase();
   const all = [...spots.values()];
-  const nParking = all.filter(s => s.category === 'parking').length;
-  $('#listFilters').innerHTML = `
-    <button class="chip-filter ${listFilter === 'all' ? 'on' : ''}" data-f="all">All <small>${all.length}</small></button>
-    <button class="chip-filter ${listFilter === 'parking' ? 'on' : ''}" data-f="parking"><span class="p-mini">P</span> Parking <small>${nParking}</small></button>`;
+  $('#listFilters').innerHTML =
+    `<button class="chip-filter ${listFilter === 'all' ? 'on' : ''}" data-f="all">All <small>${all.length}</small></button>` +
+    Object.entries(CATEGORIES).map(([k, c]) =>
+      `<button class="chip-filter ${listFilter === k ? 'on' : ''}" data-f="${k}">${catBadge(k, 'p-mini')} ${c.plural} <small>${all.filter(s => s.category === k).length}</small></button>`).join('');
   const arr = all
-    .filter(s => listFilter !== 'parking' || s.category === 'parking')
+    .filter(s => !hiddenByFilter(s))
     .filter(s => !q || s.name.toLowerCase().includes(q) || (s.notes || '').toLowerCase().includes(q) || areaShort(s).toLowerCase().includes(q))
     .sort((a, b) => a.name.localeCompare(b.name));
   $('#listItems').innerHTML = arr.map(s => {
     const ph = spotPhotos(s.id);
-    const parking = s.category === 'parking';
+    const cat = catOf(s);
     const where = areaShort(s);
     return `<button class="list-row" data-id="${s.id}">
-      ${parking ? '<span class="ph-empty ph-parking">P</span>' : ph[0] ? `<img src="${ph[0].thumb}" alt="">` : '<span class="ph-empty">📍</span>'}
+      ${cat ? `<span class="ph-empty ph-cat" style="background:${CATEGORIES[cat].color}">${CATEGORIES[cat].badge}</span>` : ph[0] ? `<img src="${ph[0].thumb}" alt="">` : '<span class="ph-empty">📍</span>'}
       <span class="lr-text"><b>${esc(s.name)}</b><small>${where ? esc(where) + ' · ' : ''}${ph.length} photo${ph.length === 1 ? '' : 's'}${s.notes ? ' · ' + esc(s.notes.split('\n')[0].slice(0, 60)) : ''}</small></span>
     </button>`;
-  }).join('') || `<p class="empty">${listFilter === 'parking' ? 'No spots marked as parking yet. Open a spot, tap ⋯ → Mark as parking.' : spots.size ? 'No matches.' : 'No spots yet. Tap “Add photo” when you’re at a location.'}</p>`;
+  }).join('') || `<p class="empty">${listFilter !== 'all' ? `No spots marked as ${CATEGORIES[listFilter].label.toLowerCase()} yet. Open a spot, tap ⋯ → Mark as ${CATEGORIES[listFilter].label.toLowerCase()}.` : spots.size ? 'No matches.' : 'No spots yet. Tap “Add photo” when you’re at a location.'}</p>`;
 }
 
 function setListFilter(f) {
-  listFilter = f;
-  try { localStorage.setItem('pg_filter', f); } catch {}
-  $('#filterPill').classList.toggle('hidden', f !== 'parking');
-  for (const [id, m] of markers) {
-    const sp = spots.get(id);
-    m.getElement().classList.toggle('filtered-out', f === 'parking' && !(sp && sp.category === 'parking'));
-  }
+  listFilter = CATEGORIES[f] ? f : 'all';
+  const pill = $('#filterPill');
+  if (listFilter === 'all') pill.classList.add('hidden');
+  else { pill.innerHTML = `${catBadge(listFilter, 'p-mini')} ${CATEGORIES[listFilter].plural} only ✕`; pill.classList.remove('hidden'); }
+  for (const [id, m] of markers) m.getElement().classList.toggle('filtered-out', hiddenByFilter(spots.get(id)));
   renderList();
-  if (f === 'parking') {
-    const ps = [...spots.values()].filter(x => x.category === 'parking');
+  if (listFilter !== 'all') {
+    const ps = [...spots.values()].filter(x => x.category === listFilter);
     if (ps.length === 1) map.easeTo({ center: [ps[0].lng, ps[0].lat], zoom: Math.max(map.getZoom(), 14) });
     else if (ps.length > 1) { const b = new maplibregl.LngLatBounds(); ps.forEach(x => b.extend([x.lng, x.lat])); map.fitBounds(b, { padding: { top: 90, bottom: 140, left: 50, right: 70 }, maxZoom: 15 }); }
   }
+}
+
+// ===================== Address search =====================
+let searchTimer = null, searchCtl = null, lastSearchAt = 0, searchResults = [], searchMarker = null, searchHit = null;
+function openSearch() {
+  closeSpot(); closeList(); closeLayers();
+  $('#searchBar').classList.remove('hidden');
+  setTimeout(() => $('#searchInput').focus(), 50);
+}
+function closeSearch(clearPin = true) {
+  $('#searchBar').classList.add('hidden');
+  $('#searchResults').innerHTML = '';
+  if (clearPin) clearSearchPin();
+}
+function clearSearchPin() {
+  if (searchMarker) { searchMarker.remove(); searchMarker = null; }
+  searchHit = null;
+  $('#searchCard').classList.add('hidden');
+}
+function parseCoords(q) {
+  const m = q.match(/^\s*(-?\d{1,3}(?:\.\d+)?)\s*[, ]\s*(-?\d{1,3}(?:\.\d+)?)\s*$/);
+  if (!m) return null;
+  const lat = +m[1], lng = +m[2];
+  return (Math.abs(lat) <= 90 && Math.abs(lng) <= 180) ? { lat, lng } : null;
+}
+function onSearchInput() {
+  clearTimeout(searchTimer);
+  const q = $('#searchInput').value.trim();
+  if (q.length < 3) { $('#searchResults').innerHTML = ''; return; }
+  searchTimer = setTimeout(() => runSearch(q), 700);
+}
+async function runSearch(q) {
+  const box = $('#searchResults');
+  const c = parseCoords(q);
+  if (c) {
+    searchResults = [{ name: 'Coordinates', detail: fmtCoord(c.lat, c.lng), lat: c.lat, lng: c.lng }];
+    box.innerHTML = renderSearchResults(); return;
+  }
+  // OpenStreetMap's free geocoder allows about 1 request per second, so wait if needed.
+  const wait = Math.max(0, 1100 - (Date.now() - lastSearchAt));
+  if (wait) await new Promise(r => setTimeout(r, wait));
+  if ($('#searchInput').value.trim() !== q) return; // user kept typing
+  lastSearchAt = Date.now();
+  if (searchCtl) searchCtl.abort();
+  searchCtl = new AbortController();
+  box.innerHTML = '<p class="sr-msg">Searching…</p>';
+  const b = map.getBounds();
+  const params = new URLSearchParams({ format: 'jsonv2', addressdetails: '1', limit: '6', countrycodes: 'us', q,
+    viewbox: [b.getWest() - 0.5, b.getNorth() + 0.5, b.getEast() + 0.5, b.getSouth() - 0.5].map(n => n.toFixed(3)).join(',') });
+  try {
+    const j = await (await fetch('https://nominatim.openstreetmap.org/search?' + params, { headers: { 'Accept-Language': 'en' }, signal: searchCtl.signal })).json();
+    searchResults = j.map(r => {
+      const a = r.address || {};
+      const street = [a.house_number, a.road].filter(Boolean).join(' ');
+      const name = r.name || street || r.display_name.split(',')[0];
+      const town = a.city || a.town || a.village || a.hamlet || a.suburb || a.county || '';
+      return { name, detail: [street && street !== name ? street : '', town, a.state].filter(Boolean).join(', '), lat: +r.lat, lng: +r.lon };
+    });
+    box.innerHTML = searchResults.length ? renderSearchResults() : '<p class="sr-msg">No matches. Try adding the town, e.g. “Ocean Ave, Carmel”.</p>';
+  } catch (e) {
+    if (e.name !== 'AbortError') box.innerHTML = '<p class="sr-msg">Search isn’t available right now (offline?).</p>';
+  }
+}
+function renderSearchResults() {
+  return searchResults.map((r, i) => `<button class="sr-row" data-i="${i}"><b>${esc(r.name)}</b><small>${esc(r.detail)}</small></button>`).join('');
+}
+function pickSearchResult(i) {
+  const r = searchResults[i]; if (!r) return;
+  closeSearch(false);
+  clearSearchPin();
+  searchHit = r;
+  const el = document.createElement('div'); el.className = 'search-pin';
+  searchMarker = new maplibregl.Marker({ element: el, anchor: 'bottom' }).setLngLat([r.lng, r.lat]).addTo(map);
+  map.flyTo({ center: [r.lng, r.lat], zoom: 17, offset: [0, -60], duration: 1200 });
+  $('#searchCardName').textContent = r.name;
+  $('#searchCardDetail').textContent = r.detail || fmtCoord(r.lat, r.lng);
+  $('#searchCard').classList.remove('hidden');
+}
+async function saveSearchHit() {
+  const r = searchHit; if (!r) return;
+  clearSearchPin();
+  const id = await createSpot(r.lat, r.lng, r.name !== 'Coordinates' ? r.name : null);
+  if (id) openSpot(id, false);
+}
+function adjustSearchHit() {
+  const r = searchHit; if (!r) return;
+  clearSearchPin();
+  map.jumpTo({ center: [r.lng, r.lat] });
+  startPlacing({ mode: 'new' });
 }
 
 // ===================== Overlays: public land + boundaries =====================
@@ -930,7 +1026,7 @@ function renderLayersPanel() {
     ${sw('cities')}${sw('cdps')}${sw('counties')}
     <p class="fine">Tap anywhere on the map to see what land and area you're in. Lines come from the California Protected Areas Database and the U.S. Census, for reference only, not legal property boundaries.</p>`;
 }
-function openLayers() { if (!overlaysReady) setupOverlays(); closeSpot(); closeList(); renderLayersPanel(); $('#layersSheet').classList.remove('hidden'); }
+function openLayers() { if (!overlaysReady) setupOverlays(); closeSpot(); closeList(); closeSearch(); renderLayersPanel(); $('#layersSheet').classList.remove('hidden'); }
 function closeLayers() { $('#layersSheet').classList.add('hidden'); }
 
 // --- identify what's at a point (used for map taps and spot labels) ---
@@ -1062,6 +1158,17 @@ function bindUI() {
   };
   $('#listFilters').onclick = e => { const b = e.target.closest('[data-f]'); if (b) setListFilter(b.dataset.f); };
   $('#filterPill').onclick = () => setListFilter('all');
+  $('#btnSearch').onclick = openSearch;
+  $('#searchClose').onclick = () => closeSearch();
+  $('#searchInput').oninput = onSearchInput;
+  $('#searchInput').onkeydown = e => {
+    if (e.key === 'Enter') { e.preventDefault(); clearTimeout(searchTimer); const q = e.target.value.trim(); if (q) runSearch(q); }
+    if (e.key === 'Escape') closeSearch();
+  };
+  $('#searchResults').onclick = e => { const b = e.target.closest('.sr-row'); if (b) pickSearchResult(+b.dataset.i); };
+  $('#searchSave').onclick = saveSearchHit;
+  $('#searchAdjust').onclick = adjustSearchHit;
+  $('#searchDismiss').onclick = clearSearchPin;
   $('#btnAccount').onclick = accountMenu;
   $('#sheetClose').onclick = closeSpot;
   $('#spotMore').onclick = spotMenu;
@@ -1084,7 +1191,7 @@ function bindUI() {
 
 function boot() {
   bindUI();
-  $('#filterPill').classList.toggle('hidden', listFilter !== 'parking');
+
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
   if (!IS_CONFIGURED) {
     show('signin');

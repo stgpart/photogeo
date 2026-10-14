@@ -36,10 +36,12 @@
   <header class="topbar">
     <div class="brand">PhotoGeo</div>
     <div class="topbar-actions">
-      <button id="btnLayer" class="chip" title="Switch map style">🛰 Satellite</button>
+      <button id="btnLayer" class="chip" title="Map layers">◫ Layers</button>
       <button id="btnAccount" class="avatar" title="Account">?</button>
     </div>
   </header>
+
+  <button id="filterPill" class="filter-pill hidden" title="Show all spots"><span class="p-mini">P</span> Parking only ✕</button>
 
   <div id="banner" class="banner hidden">
     <span id="bannerText"></span>
@@ -71,6 +73,7 @@
       <div class="sheet-title">
         <h2 id="spotName"></h2>
         <button id="spotCoords" class="coords" title="Copy coordinates"></button>
+        <div id="spotTags" class="tags"></div>
       </div>
       <button id="sheetClose" class="icon-btn" title="Close">✕</button>
     </div>
@@ -79,6 +82,7 @@
       <button id="spotAddPhoto" class="btn small primary">📷 Add photo here</button>
       <button id="spotMore" class="btn small">⋯</button>
     </div>
+    <div id="spotArea" class="spot-area"></div>
     <label class="field-label" for="spotNotes">Notes</label>
     <textarea id="spotNotes" rows="3" placeholder="Parking, access, best angles, tide, crowds…"></textarea>
     <div class="grid-head"><span id="spotCount"></span></div>
@@ -92,8 +96,19 @@
       <h2>Spots</h2>
       <button id="listClose" class="icon-btn" title="Close">✕</button>
     </div>
-    <input id="listSearch" type="search" placeholder="Search spots and notes">
+    <div id="listFilters" class="filters"></div>
+    <input id="listSearch" type="search" placeholder="Search spots, notes, parks and towns">
     <div id="listItems" class="list"></div>
+  </section>
+
+  <!-- Layers -->
+  <section id="layersSheet" class="sheet hidden" aria-label="Map layers">
+    <div class="sheet-handle"></div>
+    <div class="sheet-head">
+      <h2>Map layers</h2>
+      <button id="layersClose" class="icon-btn" title="Close">✕</button>
+    </div>
+    <div id="layersBody"></div>
   </section>
 
   <!-- Photo viewer -->

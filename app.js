@@ -142,6 +142,8 @@ let unsubSpots = null, unsubPhotos = null, metaRef = null;
 let currentSpotId = null;
 let placing = null;        // null | {mode:'new'} | {mode:'move', spotId}
 let is3D = false, baseLayer = 'satellite', didInitialFit = false, photosLoaded = false;
+let listFilter = 'all';     // 'all' | 'parking'
+try { if (localStorage.getItem('pg_filter') === 'parking') listFilter = 'parking'; } catch {}
 
 // ===================== Firebase / auth =====================
 function initFirebase() {
@@ -193,6 +195,7 @@ function startListeners() {
     });
     renderAll();
     if (!didInitialFit) { didInitialFit = true; if (spots.size) fitToSpots(); else locateMe(false); }
+    setTimeout(sweepAreas, 1500);
   }, err => toast('Sync error (spots): ' + err.code, 6000));
   unsubPhotos = userCol('photos').onSnapshot(snap => {
     snap.docChanges().forEach(ch => {
@@ -217,7 +220,11 @@ function initMap() {
     maxPitch: 80, attributionControl: { compact: true },
   });
   map.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), 'top-right');
-  map.on('load', () => renderMarkers());
+  const ready = () => { if (overlaysReady) return; renderMarkers(); try { setupOverlays(); } catch (e) { console.warn('overlays', e); } };
+  map.on('load', ready);
+  map.on('idle', ready); // backup: some browsers/tile errors can delay 'load'
+  map.on('moveend', scheduleOverlayRefresh);
+  map.on('click', onMapClick);
 }
 
 let userDot = null;
@@ -250,12 +257,13 @@ function toggle3D() {
   $('#btn3d').classList.toggle('on', is3D);
 }
 
-function toggleLayer() {
-  baseLayer = baseLayer === 'satellite' ? 'streets' : 'satellite';
+function setBaseLayer(name) {
+  baseLayer = name;
   const sat = baseLayer === 'satellite';
   ['satellite', 'roads', 'labels'].forEach(id => map.setLayoutProperty(id, 'visibility', sat ? 'visible' : 'none'));
   map.setLayoutProperty('streets', 'visibility', sat ? 'none' : 'visible');
-  $('#btnLayer').textContent = sat ? '🛰 Satellite' : '🗺 Streets';
+  try { localStorage.setItem('pg_base', baseLayer); } catch {}
+  renderLayersPanel();
 }
 
 function fitToSpots() {
@@ -277,14 +285,16 @@ function renderMarkers() {
   for (const [id, m] of markers) if (!spots.has(id)) { m.remove(); markers.delete(id); }
   for (const s of spots.values()) {
     const cover = spotPhotos(s.id)[0];
-    const key = `${cover ? cover.id : '-'}|${s.lat}|${s.lng}|${s.name}`;
+    const parking = s.category === 'parking';
+    const key = `${cover ? cover.id : '-'}|${s.lat}|${s.lng}|${s.name}|${parking}`;
     let m = markers.get(s.id);
-    if (m && m._pgKey === key) continue;
+    if (m && m._pgKey === key) { m.getElement().classList.toggle('filtered-out', listFilter === 'parking' && !parking); continue; }
     if (m) m.remove();
     const el = document.createElement('button');
-    el.className = 'marker' + (cover ? ' has-photo' : '');
+    el.className = 'marker' + (parking ? ' parking' : cover ? ' has-photo' : '');
+    if (listFilter === 'parking' && !parking) el.classList.add('filtered-out');
     el.title = s.name;
-    el.innerHTML = cover ? `<img src="${cover.thumb}" alt="">` : '<span>📍</span>';
+    el.innerHTML = parking ? '<span class="p-badge">P</span>' : cover ? `<img src="${cover.thumb}" alt="">` : '<span>📍</span>';
     el.addEventListener('click', e => { e.stopPropagation(); openSpot(s.id); });
     m = new maplibregl.Marker({ element: el, anchor: 'bottom' }).setLngLat([s.lng, s.lat]).addTo(map);
     m._pgKey = key;
@@ -306,7 +316,7 @@ function renderAll() {
 // ===================== Spot sheet =====================
 function openSpot(id, fly = true) {
   currentSpotId = id;
-  closeList();
+  closeList(); closeLayers();
   renderSpotSheet();
   $('#sheet').classList.remove('hidden');
   const s = spots.get(id);
@@ -319,6 +329,9 @@ function renderSpotSheet() {
   if (!s) { closeSpot(); return; }
   $('#spotName').textContent = s.name;
   $('#spotCoords').textContent = fmtCoord(s.lat, s.lng);
+  $('#spotTags').innerHTML = (s.category === 'parking' ? '<span class="tag tag-parking">P Parking</span>' : '');
+  $('#spotArea').innerHTML = areaHtml(s);
+  if (!areaIsCurrent(s)) ensureArea(s);
   $('#spotDirections').href = `https://www.google.com/maps/dir/?api=1&destination=${s.lat},${s.lng}`;
   const notes = $('#spotNotes');
   if (document.activeElement !== notes && notes.dataset.spot !== s.id + '|' + (s.updatedAt || '')) {
@@ -351,6 +364,7 @@ async function spotMenu() {
   const r = await dialog({
     title: s.name, buttons: [
       { label: 'Rename', value: 'rename' },
+      { label: s.category === 'parking' ? 'Unmark as parking' : 'Mark as parking', value: 'parking' },
       { label: 'Move pin', value: 'move' },
       { label: 'Delete spot', value: 'delete', cls: 'danger' },
       { label: 'Close', value: null },
@@ -359,6 +373,11 @@ async function spotMenu() {
   if (r.value === 'rename') {
     const n = await dialog({ title: 'Rename spot', input: s.name, buttons: [{ label: 'Cancel', value: false }, { label: 'Save', value: true, cls: 'primary' }] });
     if (n.value && n.text) userCol('spots').doc(s.id).update({ name: n.text, updatedAt: nowIso() });
+  } else if (r.value === 'parking') {
+    const on = s.category !== 'parking';
+    userCol('spots').doc(s.id).update({ category: on ? 'parking' : null, updatedAt: nowIso() })
+      .catch(e => toast('Not saved: ' + e.code, 5000));
+    toast(on ? 'Marked as parking' : 'No longer marked as parking');
   } else if (r.value === 'move') {
     startPlacing({ mode: 'move', spotId: s.id });
   } else if (r.value === 'delete') {
@@ -395,7 +414,7 @@ async function confirmPlacing() {
   stopPlacing();
   if (!p) return;
   if (p.mode === 'move') {
-    await userCol('spots').doc(p.spotId).update({ lat: c.lat, lng: c.lng, updatedAt: nowIso() }).catch(e => toast('Move failed: ' + e.code, 5000));
+    await userCol('spots').doc(p.spotId).update({ lat: c.lat, lng: c.lng, area: null, updatedAt: nowIso() }).catch(e => toast('Move failed: ' + e.code, 5000));
     openSpot(p.spotId, false);
   } else {
     const id = await createSpot(c.lat, c.lng);
@@ -760,20 +779,242 @@ async function deleteCurrentPhoto() {
 }
 
 // ===================== Spot list =====================
-function openList() { closeSpot(); renderList(); $('#listSheet').classList.remove('hidden'); }
+function openList() { closeSpot(); closeLayers(); renderList(); $('#listSheet').classList.remove('hidden'); }
 function closeList() { $('#listSheet').classList.add('hidden'); }
 function renderList() {
   const q = $('#listSearch').value.trim().toLowerCase();
-  const arr = [...spots.values()]
-    .filter(s => !q || s.name.toLowerCase().includes(q) || (s.notes || '').toLowerCase().includes(q))
+  const all = [...spots.values()];
+  const nParking = all.filter(s => s.category === 'parking').length;
+  $('#listFilters').innerHTML = `
+    <button class="chip-filter ${listFilter === 'all' ? 'on' : ''}" data-f="all">All <small>${all.length}</small></button>
+    <button class="chip-filter ${listFilter === 'parking' ? 'on' : ''}" data-f="parking"><span class="p-mini">P</span> Parking <small>${nParking}</small></button>`;
+  const arr = all
+    .filter(s => listFilter !== 'parking' || s.category === 'parking')
+    .filter(s => !q || s.name.toLowerCase().includes(q) || (s.notes || '').toLowerCase().includes(q) || areaShort(s).toLowerCase().includes(q))
     .sort((a, b) => a.name.localeCompare(b.name));
   $('#listItems').innerHTML = arr.map(s => {
     const ph = spotPhotos(s.id);
+    const parking = s.category === 'parking';
+    const where = areaShort(s);
     return `<button class="list-row" data-id="${s.id}">
-      ${ph[0] ? `<img src="${ph[0].thumb}" alt="">` : '<span class="ph-empty">📍</span>'}
-      <span class="lr-text"><b>${esc(s.name)}</b><small>${ph.length} photo${ph.length === 1 ? '' : 's'}${s.notes ? ' · ' + esc(s.notes.slice(0, 60)) : ''}</small></span>
+      ${parking ? '<span class="ph-empty ph-parking">P</span>' : ph[0] ? `<img src="${ph[0].thumb}" alt="">` : '<span class="ph-empty">📍</span>'}
+      <span class="lr-text"><b>${esc(s.name)}</b><small>${where ? esc(where) + ' · ' : ''}${ph.length} photo${ph.length === 1 ? '' : 's'}${s.notes ? ' · ' + esc(s.notes.split('\n')[0].slice(0, 60)) : ''}</small></span>
     </button>`;
-  }).join('') || `<p class="empty">${spots.size ? 'No matches.' : 'No spots yet. Tap “Add photo” when you’re at a location.'}</p>`;
+  }).join('') || `<p class="empty">${listFilter === 'parking' ? 'No spots marked as parking yet. Open a spot, tap ⋯ → Mark as parking.' : spots.size ? 'No matches.' : 'No spots yet. Tap “Add photo” when you’re at a location.'}</p>`;
+}
+
+function setListFilter(f) {
+  listFilter = f;
+  try { localStorage.setItem('pg_filter', f); } catch {}
+  $('#filterPill').classList.toggle('hidden', f !== 'parking');
+  for (const [id, m] of markers) {
+    const sp = spots.get(id);
+    m.getElement().classList.toggle('filtered-out', f === 'parking' && !(sp && sp.category === 'parking'));
+  }
+  renderList();
+  if (f === 'parking') {
+    const ps = [...spots.values()].filter(x => x.category === 'parking');
+    if (ps.length === 1) map.easeTo({ center: [ps[0].lng, ps[0].lat], zoom: Math.max(map.getZoom(), 14) });
+    else if (ps.length > 1) { const b = new maplibregl.LngLatBounds(); ps.forEach(x => b.extend([x.lng, x.lat])); map.fitBounds(b, { padding: { top: 90, bottom: 140, left: 50, right: 70 }, maxZoom: 15 }); }
+  }
+}
+
+// ===================== Overlays: public land + boundaries =====================
+const CPAD_URL = 'https://services1.arcgis.com/4ZKi1B1zTblbwgWB/ArcGIS/rest/services/CPAD_Holdings_Current_Release/FeatureServer/0';
+const TIGER_URL = 'https://tigerweb.geo.census.gov/arcgis/rest/services/TIGERweb/tigerWMS_Current/MapServer';
+const LAND_GROUPS = {
+  state:     { label: 'State (incl. State Parks)', color: '#ffe63b' },
+  federal:   { label: 'Federal',                    color: '#ff7a45' },
+  county:    { label: 'County',                     color: '#4fc3f7' },
+  city:      { label: 'City',                       color: '#7ee081' },
+  district:  { label: 'Special district',           color: '#b39ddb' },
+  nonprofit: { label: 'Land trust / nonprofit',     color: '#f48fb1' },
+  private:   { label: 'Private (protected)',        color: '#bdbdbd' },
+};
+function landGroup(layer, lev) {
+  const L = String(layer || ''), V = String(lev || '');
+  if (/State|California Department/i.test(L) || V === 'State') return 'state';
+  if (/^US |Federal|National Park/i.test(L) || V === 'Federal') return 'federal';
+  if (L === 'County' || V === 'County') return 'county';
+  if (L === 'City' || V === 'City') return 'city';
+  if (/Special District/i.test(L) || /Special District/i.test(V)) return 'district';
+  if (/Non Governmental|Non Profit/i.test(L) || /Non Profit/i.test(V)) return 'nonprofit';
+  return 'private';
+}
+const OVERLAYS = {
+  land:     { label: 'Public & protected land', url: CPAD_URL, fields: 'UNIT_NAME,AGNCY_NAME,AGNCY_LEV,LAYER,ACCESS_TYP', minZoom: 10 },
+  cities:   { label: 'City limits',             url: TIGER_URL + '/28', fields: 'BASENAME,NAME', minZoom: 8 },
+  cdps:     { label: 'Unincorporated communities', url: TIGER_URL + '/30', fields: 'BASENAME,NAME', minZoom: 8 },
+  counties: { label: 'County lines',            url: TIGER_URL + '/82', fields: 'BASENAME,NAME', minZoom: 6 },
+};
+let overlayOn = { land: false, cities: false, cdps: false, counties: false };
+try { Object.assign(overlayOn, JSON.parse(localStorage.getItem('pg_overlays') || '{}')); } catch {}
+const overlayCtl = {};   // key -> AbortController
+let overlayTimer = null, overlaysReady = false;
+
+function setupOverlays() {
+  if (overlaysReady || !map.isStyleLoaded()) return;
+  const empty = { type: 'FeatureCollection', features: [] };
+  for (const k of Object.keys(OVERLAYS)) map.addSource('ov-' + k, { type: 'geojson', data: empty });
+  const colorExpr = ['match', ['get', 'grp'], ...Object.entries(LAND_GROUPS).flatMap(([k, v]) => [k, v.color]), '#bdbdbd'];
+  map.addLayer({ id: 'ov-land-fill', type: 'fill', source: 'ov-land', paint: { 'fill-color': colorExpr, 'fill-opacity': 0.2 } });
+  map.addLayer({ id: 'ov-land-line', type: 'line', source: 'ov-land', paint: { 'line-color': colorExpr, 'line-width': 1.6, 'line-opacity': 0.95 } });
+  map.addLayer({ id: 'ov-counties', type: 'line', source: 'ov-counties', paint: { 'line-color': '#ff5252', 'line-width': 3, 'line-dasharray': [4, 2] } });
+  map.addLayer({ id: 'ov-cdps', type: 'line', source: 'ov-cdps', paint: { 'line-color': '#ffffff', 'line-width': 1.8, 'line-dasharray': [2, 2] } });
+  map.addLayer({ id: 'ov-cities', type: 'line', source: 'ov-cities', paint: { 'line-color': '#ffffff', 'line-width': 2.6 } });
+  overlaysReady = true;
+  applyOverlayVisibility();
+  refreshOverlays();
+  try { setBaseLayer(localStorage.getItem('pg_base') || 'satellite'); } catch { renderLayersPanel(); }
+}
+
+function overlayLayerIds(k) { return k === 'land' ? ['ov-land-fill', 'ov-land-line'] : ['ov-' + k]; }
+function applyOverlayVisibility() {
+  if (!overlaysReady) return;
+  for (const k of Object.keys(OVERLAYS))
+    overlayLayerIds(k).forEach(id => map.setLayoutProperty(id, 'visibility', overlayOn[k] ? 'visible' : 'none'));
+}
+function toggleOverlay(k) {
+  if (!overlaysReady) setupOverlays();
+  overlayOn[k] = !overlayOn[k];
+  try { localStorage.setItem('pg_overlays', JSON.stringify(overlayOn)); } catch {}
+  applyOverlayVisibility();
+  renderLayersPanel();
+  if (overlayOn[k]) {
+    if (map.getZoom() < OVERLAYS[k].minZoom) toast(`Zoom in to see ${OVERLAYS[k].label.toLowerCase()}`);
+    refreshOverlays([k]);
+  }
+}
+function scheduleOverlayRefresh() { clearTimeout(overlayTimer); overlayTimer = setTimeout(() => refreshOverlays(), 350); }
+
+async function refreshOverlays(keys) {
+  if (!overlaysReady) return;
+  const b = map.getBounds(), z = map.getZoom();
+  const env = [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()].map(n => n.toFixed(5)).join(',');
+  const tol = (360 / (512 * Math.pow(2, z))) * 1.5; // ~1.5px simplification
+  for (const k of keys || Object.keys(OVERLAYS)) {
+    const o = OVERLAYS[k];
+    if (!overlayOn[k] || z < o.minZoom) continue;
+    if (overlayCtl[k]) overlayCtl[k].abort();
+    const ctl = overlayCtl[k] = new AbortController();
+    const url = `${o.url}/query?where=1%3D1&geometry=${env}&geometryType=esriGeometryEnvelope&inSR=4326&spatialRel=esriSpatialRelIntersects` +
+      `&outFields=${o.fields}&returnGeometry=true&outSR=4326&maxAllowableOffset=${tol.toFixed(7)}&resultRecordCount=2000&f=geojson`;
+    try {
+      const gj = await (await fetch(url, { signal: ctl.signal })).json();
+      if (!gj || !gj.features) throw new Error((gj && gj.error && gj.error.message) || 'bad response');
+      if (k === 'land') gj.features.forEach(f => { f.properties.grp = landGroup(f.properties.LAYER, f.properties.AGNCY_LEV); });
+      map.getSource('ov-' + k).setData(gj);
+    } catch (e) {
+      if (e.name !== 'AbortError') { console.warn('overlay', k, e); toast(`Couldn't load ${o.label.toLowerCase()} right now`, 4000); }
+    }
+  }
+}
+
+function renderLayersPanel() {
+  const el = $('#layersBody'); if (!el) return;
+  const sw = (k) => `<button class="ov-row ${overlayOn[k] ? 'on' : ''}" data-ov="${k}"><span class="ov-check">${overlayOn[k] ? '✓' : ''}</span><span>${esc(OVERLAYS[k].label)}</span>${k === 'cities' ? '<i class="ln ln-city"></i>' : k === 'cdps' ? '<i class="ln ln-cdp"></i>' : k === 'counties' ? '<i class="ln ln-county"></i>' : ''}</button>`;
+  el.innerHTML = `
+    <div class="seg">
+      <button data-base="satellite" class="${baseLayer === 'satellite' ? 'on' : ''}">🛰 Satellite</button>
+      <button data-base="streets" class="${baseLayer === 'streets' ? 'on' : ''}">🗺 Streets</button>
+    </div>
+    <div class="field-label">Land ownership</div>
+    ${sw('land')}
+    <div class="legend ${overlayOn.land ? '' : 'dim'}">${Object.values(LAND_GROUPS).map(g => `<span><i style="background:${g.color}"></i>${esc(g.label)}</span>`).join('')}</div>
+    <div class="field-label">Boundaries</div>
+    ${sw('cities')}${sw('cdps')}${sw('counties')}
+    <p class="fine">Tap anywhere on the map to see what land and area you're in. Lines come from the California Protected Areas Database and the U.S. Census, for reference only, not legal property boundaries.</p>`;
+}
+function openLayers() { if (!overlaysReady) setupOverlays(); closeSpot(); closeList(); renderLayersPanel(); $('#layersSheet').classList.remove('hidden'); }
+function closeLayers() { $('#layersSheet').classList.add('hidden'); }
+
+// --- identify what's at a point (used for map taps and spot labels) ---
+async function arcIdentify(url, fields, lng, lat) {
+  const u = `${url}/query?geometry=${lng},${lat}&geometryType=esriGeometryPoint&inSR=4326&spatialRel=esriSpatialRelIntersects&outFields=${fields}&returnGeometry=false&f=json`;
+  const j = await (await fetch(u)).json();
+  if (j.error) throw new Error(j.error.message || 'identify failed');
+  return (j.features || []).map(f => f.attributes);
+}
+async function identifyPoint(lat, lng) {
+  const [land, city, cdp, county] = await Promise.all([
+    arcIdentify(CPAD_URL, 'UNIT_NAME,AGNCY_NAME,AGNCY_LEV,LAYER,ACCESS_TYP', lng, lat),
+    arcIdentify(TIGER_URL + '/28', 'BASENAME', lng, lat),
+    arcIdentify(TIGER_URL + '/30', 'BASENAME', lng, lat),
+    arcIdentify(TIGER_URL + '/82', 'BASENAME', lng, lat),
+  ]);
+  const seen = new Set();
+  const lands = land.filter(a => { const key = a.UNIT_NAME + '|' + a.AGNCY_NAME; if (seen.has(key)) return false; seen.add(key); return true; })
+    .map(a => ({ name: a.UNIT_NAME || 'Protected land', owner: a.AGNCY_NAME || '', grp: landGroup(a.LAYER, a.AGNCY_LEV), access: a.ACCESS_TYP || '' }));
+  return {
+    v: 1,
+    land: lands,
+    city: city[0] ? city[0].BASENAME : null,
+    community: cdp[0] ? cdp[0].BASENAME : null,
+    county: county[0] ? county[0].BASENAME + ' County' : null,
+    checkedAt: nowIso(),
+  };
+}
+function areaPlace(a) {
+  if (!a) return '';
+  if (a.city) return a.city + (a.county ? ', ' + a.county : '');
+  if (a.community) return a.community + ' (unincorporated' + (a.county ? ' ' + a.county : '') + ')';
+  return a.county ? 'Unincorporated ' + a.county : '';
+}
+function areaShort(s) {
+  const a = s.area; if (!a) return '';
+  if (a.land && a.land[0]) return a.land[0].name;
+  return a.city || a.community || (a.county ? 'Unincorp. ' + a.county : '');
+}
+function landLineHtml(l) {
+  const g = LAND_GROUPS[l.grp] || LAND_GROUPS.private;
+  return `<div class="area-land"><i style="background:${g.color}"></i><span><b>${esc(l.name)}</b><br><small>${esc(l.owner)}${l.access ? ' · ' + esc(l.access) : ''}</small></span></div>`;
+}
+function areaIsCurrent(s) { return !!(s.area && s.area.v === 1); }
+function areaHtml(s) {
+  const a = s.area;
+  if (!a) return '<span class="muted">Checking land & area…</span>';
+  return (a.land && a.land.length ? a.land.map(landLineHtml).join('') : '<div class="area-land"><i class="none"></i><span>Not on public or protected land</span></div>') +
+    `<div class="area-place">${esc(areaPlace(a))}</div>`;
+}
+const areaInFlight = new Set();
+async function ensureArea(s) {
+  if (!s || areaInFlight.has(s.id)) return;
+  areaInFlight.add(s.id);
+  try {
+    const area = await identifyPoint(s.lat, s.lng);
+    await userCol('spots').doc(s.id).update({ area }); // no updatedAt bump: derived data
+  } catch (e) {
+    console.warn('area', s.id, e);
+    if (currentSpotId === s.id) $('#spotArea').innerHTML = '<span class="muted">Couldn\'t look up land & area (offline?)</span>';
+  } finally { areaInFlight.delete(s.id); }
+}
+let areaSweepRunning = false;
+async function sweepAreas() {
+  if (areaSweepRunning) return; areaSweepRunning = true;
+  try {
+    for (const s of [...spots.values()]) {
+      if (!user) break;
+      if (!areaIsCurrent(s)) { await ensureArea(s); await new Promise(r => setTimeout(r, 250)); }
+    }
+  } finally { areaSweepRunning = false; }
+}
+
+// --- tap the map to identify ---
+let idPopup = null;
+async function onMapClick(e) {
+  if (placing) return;
+  if (!Object.values(overlayOn).some(Boolean)) return; // only when an overlay is showing
+  const { lng, lat } = e.lngLat;
+  if (idPopup) idPopup.remove();
+  idPopup = new maplibregl.Popup({ closeButton: true, maxWidth: '280px', className: 'id-popup' })
+    .setLngLat([lng, lat]).setHTML('<div class="muted">Looking up…</div>').addTo(map);
+  const pop = idPopup;
+  try {
+    const a = await identifyPoint(lat, lng);
+    if (pop !== idPopup) return;
+    pop.setHTML((a.land.length ? a.land.map(landLineHtml).join('') : '<div class="area-land"><i class="none"></i><span>Not on public or protected land</span></div>') +
+      `<div class="area-place">${esc(areaPlace(a))}</div>`);
+  } catch (err) { if (pop === idPopup) pop.setHTML('<div class="muted">Couldn\'t look this up right now.</div>'); }
 }
 
 // ===================== Account menu =====================
@@ -808,7 +1049,14 @@ function bindUI() {
   $('#listItems').onclick = e => { const b = e.target.closest('.list-row'); if (b) openSpot(b.dataset.id); };
   $('#btn3d').onclick = toggle3D;
   $('#btnLocate').onclick = () => locateMe(true);
-  $('#btnLayer').onclick = toggleLayer;
+  $('#btnLayer').onclick = openLayers;
+  $('#layersClose').onclick = closeLayers;
+  $('#layersBody').onclick = e => {
+    const ov = e.target.closest('[data-ov]'); if (ov) return toggleOverlay(ov.dataset.ov);
+    const b = e.target.closest('[data-base]'); if (b) return setBaseLayer(b.dataset.base);
+  };
+  $('#listFilters').onclick = e => { const b = e.target.closest('[data-f]'); if (b) setListFilter(b.dataset.f); };
+  $('#filterPill').onclick = () => setListFilter('all');
   $('#btnAccount').onclick = accountMenu;
   $('#sheetClose').onclick = closeSpot;
   $('#spotMore').onclick = spotMenu;
@@ -831,6 +1079,7 @@ function bindUI() {
 
 function boot() {
   bindUI();
+  $('#filterPill').classList.toggle('hidden', listFilter !== 'parking');
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
   if (!IS_CONFIGURED) {
     show('signin');

@@ -149,3 +149,54 @@ textarea:focus, input:focus { outline: 2px solid rgba(255,230,59,0.55); outline-
   background: #1c1c1c; border: 1px solid var(--line); color: var(--text); padding: 10px 16px; border-radius: 12px; font-size: 14px; max-width: calc(100% - 32px);
   opacity: 0; pointer-events: none; transition: opacity .2s, transform .2s; box-shadow: 0 6px 20px rgba(0,0,0,0.4); text-align: center; }
 .toast.show { opacity: 1; transform: translate(-50%, 0); }
+
+/* ---------- parking ---------- */
+.marker.parking { margin-bottom: 2px; }
+.p-badge { display: grid; place-items: center; width: 30px; height: 30px; border-radius: 7px; background: #1e6fff; color: #fff;
+  font: 800 18px/1 -apple-system, "Segoe UI", sans-serif; border: 2px solid #fff; box-shadow: 0 2px 6px rgba(0,0,0,0.5); }
+.marker.parking span.p-badge { filter: none; font-size: 18px; }
+.marker.filtered-out { display: none !important; }
+.p-mini { display: inline-grid; place-items: center; width: 16px; height: 16px; border-radius: 4px; background: #1e6fff; color: #fff; font-weight: 800; font-size: 11px; }
+.ph-parking { background: #1e6fff !important; color: #fff; font-weight: 800; font-size: 24px !important; }
+.filters { display: flex; gap: 8px; margin: 12px 0 10px; }
+.chip-filter { border: 1px solid var(--line); background: rgba(255,255,255,0.05); border-radius: 999px; padding: 7px 12px; display: inline-flex; align-items: center; gap: 6px; font-size: 14px; }
+.chip-filter small { color: var(--muted); }
+.chip-filter.on { background: var(--accent); color: var(--accent-ink); border-color: transparent; font-weight: 600; }
+.chip-filter.on small { color: var(--accent-ink); opacity: 0.7; }
+.filter-pill { position: fixed; z-index: 6; left: 50%; transform: translateX(-50%); top: calc(var(--safe-top) + 56px);
+  border: 1px solid var(--line); background: var(--panel); border-radius: 999px; padding: 7px 14px; display: inline-flex; gap: 6px; align-items: center; font-size: 14px; }
+.tags { display: flex; gap: 6px; margin-top: 6px; }
+.tag { font-size: 12px; border-radius: 6px; padding: 2px 7px; }
+.tag-parking { background: #1e6fff; color: #fff; font-weight: 700; }
+
+/* ---------- land & area ---------- */
+.spot-area { margin: 0 0 14px; display: flex; flex-direction: column; gap: 6px; font-size: 14px; }
+.area-land { display: flex; gap: 10px; align-items: flex-start; }
+.area-land i { width: 12px; height: 12px; border-radius: 3px; margin-top: 4px; flex: none; border: 1px solid rgba(255,255,255,0.4); }
+.area-land i.none { background: transparent; }
+.area-land small { color: var(--muted); }
+.area-place { color: var(--muted); font-size: 13px; padding-left: 22px; }
+
+/* layers panel */
+.seg { display: flex; background: rgba(255,255,255,0.06); border-radius: 12px; padding: 3px; margin: 12px 0 16px; }
+.seg button { flex: 1; border: 0; background: none; padding: 8px; border-radius: 9px; font-size: 14px; }
+.seg button.on { background: var(--accent); color: var(--accent-ink); font-weight: 600; }
+.ov-row { width: 100%; display: flex; align-items: center; gap: 12px; border: 0; background: none; padding: 10px 0; border-bottom: 1px solid var(--line); text-align: left; font-size: 15px; }
+.ov-check { width: 22px; height: 22px; border-radius: 6px; border: 2px solid var(--muted); display: grid; place-items: center; font-size: 13px; font-weight: 800; flex: none; }
+.ov-row.on .ov-check { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+.ln { margin-left: auto; width: 34px; height: 0; flex: none; }
+.ln-city { border-top: 3px solid #fff; }
+.ln-cdp { border-top: 2px dashed #fff; }
+.ln-county { border-top: 3px dashed #ff5252; }
+.legend { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 12px; padding: 10px 0 16px; font-size: 13px; color: var(--muted); }
+.legend span { display: flex; align-items: center; gap: 8px; }
+.legend i { width: 12px; height: 12px; border-radius: 3px; flex: none; }
+.legend.dim { opacity: 0.45; }
+#layersSheet .field-label { margin-top: 6px; }
+.fine { font-size: 12px; color: var(--muted); margin: 14px 0 0; line-height: 1.45; }
+
+/* map popup */
+.id-popup .maplibregl-popup-content { background: var(--panel-solid); color: var(--text); border: 1px solid var(--line); border-radius: 12px; padding: 12px 30px 12px 12px; font-size: 14px; display: flex; flex-direction: column; gap: 6px; }
+.id-popup .maplibregl-popup-tip { border-top-color: var(--panel-solid) !important; border-bottom-color: var(--panel-solid) !important; }
+.id-popup .maplibregl-popup-close-button { color: var(--muted); font-size: 18px; right: 4px; top: 2px; }
+.id-popup .area-place { padding-left: 22px; }

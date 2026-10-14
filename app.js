@@ -918,7 +918,8 @@ function adjustSearchHit() {
 }
 
 // ===================== Overlays: public land + boundaries =====================
-const CPAD_URL = 'https://services1.arcgis.com/4ZKi1B1zTblbwgWB/ArcGIS/rest/services/CPAD_Holdings_Current_Release/FeatureServer/0';
+// CPAD "Units": parcels merged into one outline per park/preserve per owning agency (whole areas, not parcels).
+const CPAD_URL = 'https://services1.arcgis.com/4ZKi1B1zTblbwgWB/ArcGIS/rest/services/cpad_2024a_unitsgdb/FeatureServer/0';
 const TIGER_URL = 'https://tigerweb.geo.census.gov/arcgis/rest/services/TIGERweb/tigerWMS_Current/MapServer';
 const LAND_GROUPS = {
   state:     { label: 'State (incl. State Parks)', color: '#ffe63b' },

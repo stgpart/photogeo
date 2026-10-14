@@ -853,9 +853,12 @@ const overlayCtl = {};   // key -> AbortController
 let overlayTimer = null, overlaysReady = false;
 
 function setupOverlays() {
-  if (overlaysReady || !map.isStyleLoaded()) return;
+  // Only needs the style itself parsed, not every tile (map.isStyleLoaded() waits for tiles too).
+  if (overlaysReady || !(map.style && map.style._loaded)) return;
   const empty = { type: 'FeatureCollection', features: [] };
-  for (const k of Object.keys(OVERLAYS)) map.addSource('ov-' + k, { type: 'geojson', data: empty });
+  try {
+    for (const k of Object.keys(OVERLAYS)) if (!map.getSource('ov-' + k)) map.addSource('ov-' + k, { type: 'geojson', data: empty });
+  } catch (e) { console.warn('overlay setup deferred', e); return; }
   const colorExpr = ['match', ['get', 'grp'], ...Object.entries(LAND_GROUPS).flatMap(([k, v]) => [k, v.color]), '#bdbdbd'];
   map.addLayer({ id: 'ov-land-fill', type: 'fill', source: 'ov-land', paint: { 'fill-color': colorExpr, 'fill-opacity': 0.2 } });
   map.addLayer({ id: 'ov-land-line', type: 'line', source: 'ov-land', paint: { 'line-color': colorExpr, 'line-width': 1.6, 'line-opacity': 0.95 } });

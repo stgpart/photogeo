@@ -150,9 +150,12 @@ const CATEGORIES = {
   bathroom: { label: 'Bathroom', plural: 'Bathrooms', badge: 'WC', color: '#00a88f' },
 };
 const catOf = s => (s && CATEGORIES[s.category]) ? s.category : null;
-const catBadge = (c, cls = 'p-badge') => `<span class="${cls}" style="background:${CATEGORIES[c].color}">${CATEGORIES[c].badge}</span>`;
+const catBadge = (c, cls = 'p-badge') => { const i = c === 'permit' ? { badge: '!', color: '#e5484d' } : CATEGORIES[c]; return `<span class="${cls}" style="background:${i.color}">${i.badge}</span>`; };
 let areaFilter = null;     // null | { key, name, kind, feature } — show only spots inside this city/community
-const hiddenByFilter = s => (listFilter !== 'all' && catOf(s) !== listFilter) || (areaFilter && !inArea(s));
+const PERMIT_FLAG = { label: 'Permit needed', plural: 'Permit needed', badge: '!', color: '#e5484d' };
+const filterInfo = f => f === 'permit' ? PERMIT_FLAG : CATEGORIES[f];
+const matchesFilter = s => listFilter === 'all' || (listFilter === 'permit' ? !!(s && s.permit) : catOf(s) === listFilter);
+const hiddenByFilter = s => !matchesFilter(s) || (areaFilter && !inArea(s));
 
 // ===================== Firebase / auth =====================
 function initFirebase() {
@@ -297,7 +300,7 @@ function renderMarkers() {
   for (const s of spots.values()) {
     const cover = spotPhotos(s.id)[0];
     const cat = catOf(s);
-    const key = `${cover ? cover.id : '-'}|${s.lat}|${s.lng}|${s.name}|${cat}`;
+    const key = `${cover ? cover.id : '-'}|${s.lat}|${s.lng}|${s.name}|${cat}|${!!s.permit}`;
     let m = markers.get(s.id);
     if (m && m._pgKey === key) { m.getElement().classList.toggle('filtered-out', hiddenByFilter(s)); continue; }
     if (m) m.remove();
@@ -305,7 +308,7 @@ function renderMarkers() {
     el.className = 'marker' + (cat ? ' cat' : cover ? ' has-photo' : '');
     if (hiddenByFilter(s)) el.classList.add('filtered-out');
     el.title = s.name;
-    el.innerHTML = cat ? catBadge(cat) : cover ? `<img src="${cover.thumb}" alt="">` : '<span>📍</span>';
+    el.innerHTML = (s.permit ? '<i class="permit-dot" title="Permit needed">!</i>' : '') + (cat ? catBadge(cat) : cover ? `<img src="${cover.thumb}" alt="">` : '<span>📍</span>');
     el.addEventListener('click', e => { e.stopPropagation(); openSpot(s.id); });
     m = new maplibregl.Marker({ element: el, anchor: 'bottom' }).setLngLat([s.lng, s.lat]).addTo(map);
     m._pgKey = key;
@@ -341,7 +344,8 @@ function renderSpotSheet() {
   $('#spotName').textContent = s.name;
   $('#spotCoords').textContent = fmtCoord(s.lat, s.lng);
   const sc = catOf(s);
-  $('#spotTags').innerHTML = sc ? `<span class="tag" style="background:${CATEGORIES[sc].color}">${CATEGORIES[sc].badge} ${CATEGORIES[sc].label}</span>` : '';
+  $('#spotTags').innerHTML = (sc ? `<span class="tag" style="background:${CATEGORIES[sc].color}">${CATEGORIES[sc].badge} ${CATEGORIES[sc].label}</span>` : '') +
+    (s.permit ? `<span class="tag" style="background:${PERMIT_FLAG.color}">! Permit needed</span>` : '');
   $('#spotArea').innerHTML = areaHtml(s);
   if (!areaIsCurrent(s)) ensureArea(s);
   $('#spotDirections').href = `https://www.google.com/maps/dir/?api=1&destination=${s.lat},${s.lng}`;
@@ -377,6 +381,7 @@ async function spotMenu() {
     title: s.name, buttons: [
       { label: 'Rename', value: 'rename' },
       ...Object.entries(CATEGORIES).map(([k, c]) => ({ label: s.category === k ? `Unmark as ${c.label.toLowerCase()}` : `Mark as ${c.label.toLowerCase()}`, value: 'cat:' + k })),
+      { label: s.permit ? 'Unmark permit needed' : 'Mark permit needed', value: 'permit' },
       { label: 'Move pin', value: 'move' },
       { label: 'Delete spot', value: 'delete', cls: 'danger' },
       { label: 'Close', value: null },
@@ -385,6 +390,10 @@ async function spotMenu() {
   if (r.value === 'rename') {
     const n = await dialog({ title: 'Rename spot', input: s.name, buttons: [{ label: 'Cancel', value: false }, { label: 'Save', value: true, cls: 'primary' }] });
     if (n.value && n.text) userCol('spots').doc(s.id).update({ name: n.text, updatedAt: nowIso() });
+  } else if (r.value === 'permit') {
+    const on = !s.permit;
+    userCol('spots').doc(s.id).update({ permit: on, updatedAt: nowIso() }).catch(e => toast('Not saved: ' + e.code, 5000));
+    toast(on ? 'Marked: permit needed. Add the details in Notes.' : 'Permit flag removed');
   } else if (typeof r.value === 'string' && r.value.startsWith('cat:')) {
     const k = r.value.slice(4), on = s.category !== k, lbl = CATEGORIES[k].label.toLowerCase();
     userCol('spots').doc(s.id).update({ category: on ? k : null, updatedAt: nowIso() })
@@ -799,7 +808,8 @@ function renderList() {
   $('#listFilters').innerHTML =
     `<button class="chip-filter ${listFilter === 'all' ? 'on' : ''}" data-f="all">All <small>${all.length}</small></button>` +
     Object.entries(CATEGORIES).map(([k, c]) =>
-      `<button class="chip-filter ${listFilter === k ? 'on' : ''}" data-f="${k}">${catBadge(k, 'p-mini')} ${c.plural} <small>${all.filter(s => s.category === k).length}</small></button>`).join('');
+      `<button class="chip-filter ${listFilter === k ? 'on' : ''}" data-f="${k}">${catBadge(k, 'p-mini')} ${c.plural} <small>${all.filter(s => s.category === k).length}</small></button>`).join('') +
+    `<button class="chip-filter ${listFilter === 'permit' ? 'on' : ''}" data-f="permit">${catBadge('permit', 'p-mini')} Permit needed <small>${all.filter(s => s.permit).length}</small></button>`;
   const arr = all
     .filter(s => !hiddenByFilter(s))
     .filter(s => !q || s.name.toLowerCase().includes(q) || (s.notes || '').toLowerCase().includes(q) || areaShort(s).toLowerCase().includes(q))
@@ -810,13 +820,13 @@ function renderList() {
     const where = areaShort(s);
     return `<button class="list-row" data-id="${s.id}">
       ${cat ? `<span class="ph-empty ph-cat" style="background:${CATEGORIES[cat].color}">${CATEGORIES[cat].badge}</span>` : ph[0] ? `<img src="${ph[0].thumb}" alt="">` : '<span class="ph-empty">📍</span>'}
-      <span class="lr-text"><b>${esc(s.name)}</b><small>${where ? esc(where) + ' · ' : ''}${ph.length} photo${ph.length === 1 ? '' : 's'}${s.notes ? ' · ' + esc(s.notes.split('\n')[0].slice(0, 60)) : ''}</small></span>
+      <span class="lr-text"><b>${s.permit ? '<span class="p-mini" style="background:#e5484d">!</span> ' : ''}${esc(s.name)}</b><small>${where ? esc(where) + ' · ' : ''}${ph.length} photo${ph.length === 1 ? '' : 's'}${s.notes ? ' · ' + esc(s.notes.split('\n')[0].slice(0, 60)) : ''}</small></span>
     </button>`;
-  }).join('') || `<p class="empty">${areaFilter && listFilter === 'all' ? `No spots in ${esc(areaFilter.name)} yet.` : listFilter !== 'all' ? `No spots marked as ${CATEGORIES[listFilter].label.toLowerCase()} yet. Open a spot, tap ⋯ → Mark as ${CATEGORIES[listFilter].label.toLowerCase()}.` : spots.size ? 'No matches.' : 'No spots yet. Tap “Add photo” when you’re at a location.'}</p>`;
+  }).join('') || `<p class="empty">${areaFilter && listFilter === 'all' ? `No spots in ${esc(areaFilter.name)} yet.` : listFilter !== 'all' ? `No spots marked “${filterInfo(listFilter).label.toLowerCase()}” yet. Open a spot, tap ⋯ → Mark ${listFilter === 'permit' ? 'permit needed' : 'as ' + filterInfo(listFilter).label.toLowerCase()}.` : spots.size ? 'No matches.' : 'No spots yet. Tap “Add photo” when you’re at a location.'}</p>`;
 }
 
 function setListFilter(f) {
-  listFilter = CATEGORIES[f] ? f : 'all';
+  listFilter = (CATEGORIES[f] || f === 'permit') ? f : 'all';
   applyFilters();
   if (listFilter !== 'all') {
     const ps = [...spots.values()].filter(x => !hiddenByFilter(x));
@@ -828,7 +838,7 @@ function applyFilters() {
   const pill = $('#filterPill');
   const parts = [];
   if (areaFilter) parts.push(esc(areaFilter.name));
-  if (listFilter !== 'all') parts.push(`${catBadge(listFilter, 'p-mini')} ${CATEGORIES[listFilter].plural}`);
+  if (listFilter !== 'all') parts.push(`${catBadge(listFilter, 'p-mini')} ${filterInfo(listFilter).plural}`);
   if (parts.length) { pill.innerHTML = parts.join(' · ') + ' only ✕'; pill.classList.remove('hidden'); }
   else pill.classList.add('hidden');
   for (const [id, m] of markers) m.getElement().classList.toggle('filtered-out', hiddenByFilter(spots.get(id)));
@@ -1170,12 +1180,81 @@ function landLineHtml(l) {
   const g = LAND_GROUPS[groupKey(l.grp)];
   return `<div class="area-land"><i style="background:${g.color}"></i><span><b>${esc(l.name)}</b><br><small><b style="color:${g.color}">${g.label} land</b> · ${esc(l.owner)}${l.access ? ' · ' + esc(l.access) : ''}</small></span></div>`;
 }
+
+// ===================== Permit guide (researched Oct 2026; always confirm with the agency) =====================
+// Notes are for paid/commercial shoots. Matched against the land manager (CPAD owner/name) and the city/community/county.
+const PERMIT_CHECKED = 'Oct 2026';
+const PERMIT_RULES = [
+  { id: 'point-lobos', when: a => a.land.some(l => /Point Lobos/i.test(l.name)),
+    title: 'Point Lobos State Natural Reserve',
+    text: 'No film or photo productions from Memorial Day weekend through Labor Day weekend. Outside that window, it follows the State Parks permit rules below. Local contact: Monterey Area State Parks, 831-624-3407.',
+    link: 'https://www.filmmonterey.org/permit/state-of-california' },
+  { id: 'state-parks', when: a => a.land.some(l => /Parks and Recreation/i.test(l.owner)),
+    title: 'California State Parks: permit required',
+    text: 'Commercial photography, including paid portrait and wedding sessions, needs a State Parks permit. Get initial approval from the park’s local rangers, then the permit is issued through the California Film Commission. A "simple" shoot (handheld gear and props, small crew, during park hours) is the lower-fee type. No retroactive permits.',
+    link: 'https://www.filmmonterey.org/permit/state-of-california' },
+  { id: 'cdfw', when: a => a.land.some(l => /Fish and Wildlife/i.test(l.owner) && !/^U\.?S/i.test(l.owner)),
+    title: 'CA Dept. of Fish & Wildlife land: ask first',
+    text: 'Ecological reserves and wildlife areas have their own access rules, and some are closed to the public. Contact CDFW before shooting here.',
+    link: 'https://wildlife.ca.gov/' },
+  { id: 'federal', when: a => a.land.some(l => groupKey(l.grp) === 'federal'),
+    title: 'Federal land: small shoots usually permit-free',
+    text: 'Under the 2025 EXPLORE Act, shoots with 5 or fewer people need no permit or fee if they use handheld gear only, don’t disturb the land or other visitors, and stay out of closed or very busy areas. 6–8 people need a free "de minimis" authorization. 9 or more people, or any set or staging, needs a permit.',
+    link: 'https://www.fs.usda.gov/r05/lospadres/permits/' },
+  { id: 'los-padres', when: a => a.land.some(l => /Los Padres/i.test(l.name)),
+    title: 'Los Padres National Forest extras',
+    text: 'Permits aren’t issued for weekends or holidays. At Pfeiffer Beach from March 15 to September 15: 8 or fewer people, handheld gear only, no staging.',
+    link: 'https://www.fs.usda.gov/r05/lospadres/permits/' },
+  { id: 'mprpd', when: a => a.land.some(l => /Regional Park District/i.test(l.owner)),
+    title: 'Monterey Peninsula Regional Park District: ask first',
+    text: 'District parks (e.g. Garland Ranch) are public land with their own rules. Contact the District before a commercial shoot: 831-372-3196.',
+    link: 'https://www.mprpd.org/' },
+  { id: 'county-parks', when: a => a.land.some(l => /Monterey, County of/i.test(l.owner) && /Park/i.test(l.name)),
+    title: 'Monterey County Parks: use fee',
+    text: 'Filming and photography in county parks (Jacks Peak, Toro, San Lorenzo, etc.) need an application through Monterey County Parks. Fees run $250–$1,500 per day depending on the park, and a damage deposit may apply.',
+    link: 'https://filmmonterey.org/permit/monterey-county/' },
+  { id: 'land-trust', when: a => a.land.some(l => groupKey(l.grp) === 'private'),
+    title: 'Private conservation land: owner’s permission',
+    text: 'This land is owned by a land trust, nonprofit, or private owner. Get the owner’s permission before shooting. Many land-trust properties are closed to the public.',
+    link: null },
+];
+const CITY_PERMITS = {
+  'Carmel-by-the-Sea': { text: 'City still-photography permit: $280, apply 2 weeks ahead. Events on Carmel Beach need a beach permit ($428, south of 10th Ave only, and you can’t cordon off the beach). Whether a small portrait session needs a permit isn’t spelled out. Ask Community Activities: 831-620-2020.', link: 'https://ci.carmel.ca.us/event-permits' },
+  'Monterey':          { text: 'City film/photo permit: $350–$1,000 per day depending on scope. Harbor/wharf areas go through the Harbormaster (831-646-3950). Special Events & Film Permits: 831-646-3770.', link: 'https://filmmonterey.org/permit/individual-city/' },
+  'Pacific Grove':     { text: 'Film permit through Pacific Grove Police (application on the city website). Fees depend on city resources used. Contact: 831-648-3143.', link: 'https://www.cityofpacificgrove.org/' },
+  'Seaside':           { text: 'Special Event application ($134) plus a Film Permit application ($1,029). Road closures need 90 days’ notice.', link: 'https://www.ci.seaside.ca.us/426/Forms-Documents' },
+  'Marina':            { text: 'Film permit $262 plus a City of Marina business license. Apply at least 3 weeks ahead with a project description.', link: 'https://www.cityofmarina.org/870/Film-Office' },
+  'Salinas':           { text: 'Permits through Recreation & Parks (831-758-7453). Fees depend on city resources used.', link: 'https://filmmonterey.org/permit/individual-city/' },
+};
+function permitNotes(a) {
+  if (!a) return [];
+  const out = PERMIT_RULES.filter(r => r.when(a)).map(r => ({ title: r.title, text: r.text, link: r.link }));
+  const onPublicNonCity = a.land.some(l => groupKey(l.grp) !== 'municipal');
+  if (a.community && /Del Monte Forest|Pebble Beach/i.test(a.community) && !onPublicNonCity) {
+    out.push({ title: 'Pebble Beach / 17-Mile Drive: private', text: 'Pebble Beach is a private community. Commercial shoots need Pebble Beach Company approval: send a written description with dates and times at least 3 weeks ahead. Weekends and summer are hard to get, and fees apply. Contact: 831-648-7859.', link: 'https://www.filmmonterey.org/permit/other-local' });
+  } else if (a.city && !onPublicNonCity) {
+    const c = CITY_PERMITS[a.city];
+    out.push(c ? { title: `City of ${a.city}`, text: c.text, link: c.link }
+               : { title: `City of ${a.city}`, text: 'Contact the City Manager’s office about filming or photo permits. Most smaller Monterey County cities follow the California Film Commission’s model permit process.', link: 'https://filmmonterey.org/permit/individual-city/' });
+  } else if (!a.city && /Monterey County/i.test(a.county || '') && !a.land.length) {
+    out.push({ title: 'Unincorporated Monterey County', text: 'Shoots on county roads or county public property need a county film permit through the Sheriff’s Office ($103, 831-755-3704), and county roads may also need an encroachment permit. On private property, you just need the owner’s permission.', link: 'https://filmmonterey.org/permit/monterey-county/' });
+  }
+  return out;
+}
+function permitHtml(a) {
+  const notes = permitNotes(a);
+  if (!notes.length) return '';
+  return `<details class="permit-box"><summary>Permit guide <small>${notes.length} note${notes.length === 1 ? '' : 's'}</small></summary>` +
+    notes.map(n => `<div class="permit-note"><b>${esc(n.title)}</b><p>${esc(n.text)}</p>${n.link ? `<a href="${n.link}" target="_blank" rel="noopener">Official info ↗</a>` : ''}</div>`).join('') +
+    `<p class="fine">Summarized ${PERMIT_CHECKED} for paid shoots. Rules change, so confirm with the agency before you book.</p></details>`;
+}
+
 function areaIsCurrent(s) { return !!(s.area && s.area.v === 1); }
 function areaHtml(s) {
   const a = s.area;
   if (!a) return '<span class="muted">Checking land & area…</span>';
   return (a.land && a.land.length ? a.land.map(landLineHtml).join('') : '<div class="area-land"><i class="none"></i><span>Not on public or protected land</span></div>') +
-    `<div class="area-place">${esc(areaPlace(a))}</div>`;
+    `<div class="area-place">${esc(areaPlace(a))}</div>` + permitHtml(a);
 }
 const areaInFlight = new Set();
 async function ensureArea(s) {
@@ -1214,7 +1293,7 @@ async function onMapClick(e) {
     const a = await identifyPoint(lat, lng);
     if (pop !== idPopup) return;
     pop.setHTML((a.land.length ? a.land.map(landLineHtml).join('') : '<div class="area-land"><i class="none"></i><span>Not on public or protected land</span></div>') +
-      `<div class="area-place">${esc(areaPlace(a))}</div>`);
+      `<div class="area-place">${esc(areaPlace(a))}</div>` + permitHtml(a));
   } catch (err) { if (pop === idPopup) pop.setHTML('<div class="muted">Couldn\'t look this up right now.</div>'); }
 }
 

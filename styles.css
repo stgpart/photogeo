@@ -164,7 +164,7 @@ textarea:focus, input:focus { outline: 2px solid rgba(255,230,59,0.55); outline-
 .chip-filter.on { background: var(--accent); color: var(--accent-ink); border-color: transparent; font-weight: 600; }
 .chip-filter.on small { color: var(--accent-ink); opacity: 0.7; }
 .filter-pill { position: fixed; z-index: 6; left: 50%; transform: translateX(-50%); top: calc(var(--safe-top) + 56px);
-  border: 2px solid var(--accent); background: var(--panel); font-weight: 600; box-shadow: 0 4px 14px rgba(0,0,0,0.5); border-radius: 999px; padding: 7px 14px; display: inline-flex; gap: 6px; align-items: center; font-size: 14px; }
+  border: 2px solid var(--accent); background: var(--panel); font-weight: 600; box-shadow: 0 4px 14px rgba(0,0,0,0.5); white-space: nowrap; max-width: calc(100% - 120px); overflow: hidden; text-overflow: ellipsis; border-radius: 999px; padding: 7px 14px; display: inline-flex; gap: 6px; align-items: center; font-size: 14px; }
 .tags { display: flex; gap: 6px; margin-top: 6px; }
 .tag { font-size: 12px; border-radius: 6px; padding: 2px 7px; color: #fff; font-weight: 700; }
 .tag-parking { background: #1e6fff; color: #fff; font-weight: 700; }
@@ -227,3 +227,15 @@ textarea:focus, input:focus { outline: 2px solid rgba(255,230,59,0.55); outline-
 .area-pick { display: flex; align-items: center; gap: 10px; margin: 0 0 10px; font-size: 14px; color: var(--muted); }
 .area-pick select { flex: 1; background: rgba(255,255,255,0.05); color: var(--text); border: 1px solid var(--line); border-radius: 12px; padding: 9px 10px; font-size: 16px; font-family: inherit; }
 .area-pick select option, .area-pick select optgroup { background: #111; color: var(--text); }
+
+/* permit flag + guide */
+.permit-dot { position: absolute; top: -6px; right: -8px; z-index: 2; width: 17px; height: 17px; border-radius: 50%; background: #e5484d; color: #fff;
+  font: 800 12px/17px -apple-system, "Segoe UI", sans-serif; font-style: normal; text-align: center; border: 2px solid #fff; box-shadow: 0 1px 4px rgba(0,0,0,0.5); pointer-events: none; }
+.permit-box { margin-top: 6px; border: 1px solid rgba(229,72,77,0.45); border-radius: 12px; padding: 8px 10px; background: rgba(229,72,77,0.07); }
+.permit-box summary { cursor: pointer; font-weight: 600; color: #ff8a8d; list-style-position: inside; }
+.permit-box summary small { color: var(--muted); font-weight: 400; margin-left: 6px; }
+.permit-note { margin-top: 10px; }
+.permit-note p { margin: 4px 0; color: var(--text); font-size: 13.5px; line-height: 1.45; }
+.permit-note a { color: var(--accent); font-size: 13px; }
+.permit-box .fine { margin-top: 10px; }
+.id-popup .permit-box { max-height: 40vh; overflow-y: auto; }

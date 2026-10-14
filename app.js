@@ -223,6 +223,8 @@ function initMap() {
   const ready = () => { if (overlaysReady) return; renderMarkers(); try { setupOverlays(); } catch (e) { console.warn('overlays', e); } };
   map.on('load', ready);
   map.on('idle', ready); // backup: some browsers/tile errors can delay 'load'
+  map.on('styledata', ready); // earliest point the style is usable
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) ready(); });
   map.on('moveend', scheduleOverlayRefresh);
   map.on('click', onMapClick);
 }

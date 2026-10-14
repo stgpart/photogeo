@@ -222,3 +222,8 @@ textarea:focus, input:focus { outline: 2px solid rgba(255,230,59,0.55); outline-
 .sc-text { display: flex; flex-direction: column; gap: 2px; }
 .sc-text small { color: var(--muted); }
 .sc-btns { display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap; }
+
+/* area picker */
+.area-pick { display: flex; align-items: center; gap: 10px; margin: 0 0 10px; font-size: 14px; color: var(--muted); }
+.area-pick select { flex: 1; background: rgba(255,255,255,0.05); color: var(--text); border: 1px solid var(--line); border-radius: 12px; padding: 9px 10px; font-size: 16px; font-family: inherit; }
+.area-pick select option, .area-pick select optgroup { background: #111; color: var(--text); }

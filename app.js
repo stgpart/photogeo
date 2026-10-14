@@ -151,7 +151,8 @@ const CATEGORIES = {
 };
 const catOf = s => (s && CATEGORIES[s.category]) ? s.category : null;
 const catBadge = (c, cls = 'p-badge') => `<span class="${cls}" style="background:${CATEGORIES[c].color}">${CATEGORIES[c].badge}</span>`;
-const hiddenByFilter = s => listFilter !== 'all' && catOf(s) !== listFilter;
+let areaFilter = null;     // null | { key, name, kind, feature } — show only spots inside this city/community
+const hiddenByFilter = s => (listFilter !== 'all' && catOf(s) !== listFilter) || (areaFilter && !inArea(s));
 
 // ===================== Firebase / auth =====================
 function initFirebase() {
@@ -790,7 +791,7 @@ async function deleteCurrentPhoto() {
 }
 
 // ===================== Spot list =====================
-function openList() { closeSpot(); closeLayers(); closeSearch(); renderList(); $('#listSheet').classList.remove('hidden'); }
+function openList() { closeSpot(); closeLayers(); closeSearch(); fillAreaSelect(); renderList(); $('#listSheet').classList.remove('hidden'); }
 function closeList() { $('#listSheet').classList.add('hidden'); }
 function renderList() {
   const q = $('#listSearch').value.trim().toLowerCase();
@@ -811,20 +812,118 @@ function renderList() {
       ${cat ? `<span class="ph-empty ph-cat" style="background:${CATEGORIES[cat].color}">${CATEGORIES[cat].badge}</span>` : ph[0] ? `<img src="${ph[0].thumb}" alt="">` : '<span class="ph-empty">📍</span>'}
       <span class="lr-text"><b>${esc(s.name)}</b><small>${where ? esc(where) + ' · ' : ''}${ph.length} photo${ph.length === 1 ? '' : 's'}${s.notes ? ' · ' + esc(s.notes.split('\n')[0].slice(0, 60)) : ''}</small></span>
     </button>`;
-  }).join('') || `<p class="empty">${listFilter !== 'all' ? `No spots marked as ${CATEGORIES[listFilter].label.toLowerCase()} yet. Open a spot, tap ⋯ → Mark as ${CATEGORIES[listFilter].label.toLowerCase()}.` : spots.size ? 'No matches.' : 'No spots yet. Tap “Add photo” when you’re at a location.'}</p>`;
+  }).join('') || `<p class="empty">${areaFilter && listFilter === 'all' ? `No spots in ${esc(areaFilter.name)} yet.` : listFilter !== 'all' ? `No spots marked as ${CATEGORIES[listFilter].label.toLowerCase()} yet. Open a spot, tap ⋯ → Mark as ${CATEGORIES[listFilter].label.toLowerCase()}.` : spots.size ? 'No matches.' : 'No spots yet. Tap “Add photo” when you’re at a location.'}</p>`;
 }
 
 function setListFilter(f) {
   listFilter = CATEGORIES[f] ? f : 'all';
-  const pill = $('#filterPill');
-  if (listFilter === 'all') pill.classList.add('hidden');
-  else { pill.innerHTML = `${catBadge(listFilter, 'p-mini')} ${CATEGORIES[listFilter].plural} only ✕`; pill.classList.remove('hidden'); }
-  for (const [id, m] of markers) m.getElement().classList.toggle('filtered-out', hiddenByFilter(spots.get(id)));
-  renderList();
+  applyFilters();
   if (listFilter !== 'all') {
-    const ps = [...spots.values()].filter(x => x.category === listFilter);
+    const ps = [...spots.values()].filter(x => !hiddenByFilter(x));
     if (ps.length === 1) map.easeTo({ center: [ps[0].lng, ps[0].lat], zoom: Math.max(map.getZoom(), 14) });
     else if (ps.length > 1) { const b = new maplibregl.LngLatBounds(); ps.forEach(x => b.extend([x.lng, x.lat])); map.fitBounds(b, { padding: { top: 90, bottom: 140, left: 50, right: 70 }, maxZoom: 15 }); }
+  }
+}
+function applyFilters() {
+  const pill = $('#filterPill');
+  const parts = [];
+  if (areaFilter) parts.push(esc(areaFilter.name));
+  if (listFilter !== 'all') parts.push(`${catBadge(listFilter, 'p-mini')} ${CATEGORIES[listFilter].plural}`);
+  if (parts.length) { pill.innerHTML = parts.join(' · ') + ' only ✕'; pill.classList.remove('hidden'); }
+  else pill.classList.add('hidden');
+  for (const [id, m] of markers) m.getElement().classList.toggle('filtered-out', hiddenByFilter(spots.get(id)));
+  if (!$('#listSheet').classList.contains('hidden')) renderList();
+}
+function clearAllFilters() {
+  listFilter = 'all';
+  setAreaFilter(null);
+}
+
+// ===================== Area (municipality) filter =====================
+const AREA_COUNTY = 'Monterey County';
+let areaChoices = null;           // [{key, name, kind:'city'|'community', layer}]
+let countyFeature = null;
+function pointInRing(x, y, ring) {
+  let inside = false;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const [xi, yi] = ring[i], [xj, yj] = ring[j];
+    if (((yi > y) !== (yj > y)) && (x < (xj - xi) * (y - yi) / (yj - yi) + xi)) inside = !inside;
+  }
+  return inside;
+}
+function pointInGeom(lng, lat, g) {
+  if (!g) return false;
+  const polys = g.type === 'Polygon' ? [g.coordinates] : g.type === 'MultiPolygon' ? g.coordinates : [];
+  return polys.some(rings => pointInRing(lng, lat, rings[0]) && !rings.slice(1).some(h => pointInRing(lng, lat, h)));
+}
+const areaCache = new Map(); // spotId|areaKey -> bool
+function inArea(s) {
+  if (!areaFilter || !s) return true;
+  const k = s.id + '|' + areaFilter.key + '|' + s.lat + '|' + s.lng;
+  if (!areaCache.has(k)) areaCache.set(k, areaFilter.feature.features.some(f => pointInGeom(s.lng, s.lat, f.geometry)));
+  return areaCache.get(k);
+}
+async function tigerQuery(layer, params) {
+  const p = new URLSearchParams(Object.assign({ f: 'json' }, params));
+  const j = await (await fetch(`${TIGER_URL}/${layer}/query?${p}`)).json();
+  if (j.error) throw new Error(j.error.message || 'boundary lookup failed');
+  return j;
+}
+async function loadAreaChoices() {
+  if (areaChoices) return areaChoices;
+  const cj = await (await fetch(`${TIGER_URL}/82/query?` + new URLSearchParams({ where: `NAME='${AREA_COUNTY}' AND STATE='06'`, outFields: 'NAME', returnGeometry: 'true', outSR: '4326', maxAllowableOffset: '0.002', f: 'geojson' }))).json();
+  countyFeature = cj.features && cj.features[0];
+  if (!countyFeature) throw new Error('county not found');
+  const xs = [], ys = [];
+  JSON.stringify(countyFeature.geometry.coordinates).replace(/\[(-?[\d.]+),(-?[\d.]+)\]/g, (_, x, y) => { xs.push(+x); ys.push(+y); });
+  const env = [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)].join(',');
+  const base = { where: "STATE='06'", geometry: env, geometryType: 'esriGeometryEnvelope', inSR: '4326', spatialRel: 'esriSpatialRelIntersects', outFields: 'BASENAME,GEOID,INTPTLAT,INTPTLON', returnGeometry: 'false' };
+  const [pl, cdp] = await Promise.all([tigerQuery(28, base), tigerQuery(30, base)]);
+  const keep = (j, kind, layer) => (j.features || []).map(f => f.attributes)
+    .filter(a => pointInGeom(+a.INTPTLON, +a.INTPTLAT, countyFeature.geometry))
+    .map(a => ({ key: a.GEOID, name: a.BASENAME, kind, layer }));
+  areaChoices = [...keep(pl, 'city', 28), ...keep(cdp, 'community', 30)].sort((a, b) => a.name.localeCompare(b.name));
+  return areaChoices;
+}
+async function fillAreaSelect() {
+  const sel = $('#areaSelect');
+  if (sel.dataset.filled) { sel.value = areaFilter ? areaFilter.key : ''; return; }
+  sel.innerHTML = '<option value="">Loading areas…</option>';
+  try {
+    const ch = await loadAreaChoices();
+    const opt = c => `<option value="${c.key}">${esc(c.name)}</option>`;
+    sel.innerHTML = `<option value="">All areas</option>` +
+      `<optgroup label="Cities in ${AREA_COUNTY}">${ch.filter(c => c.kind === 'city').map(opt).join('')}</optgroup>` +
+      `<optgroup label="Unincorporated communities">${ch.filter(c => c.kind === 'community').map(opt).join('')}</optgroup>`;
+    sel.dataset.filled = '1';
+    sel.value = areaFilter ? areaFilter.key : '';
+  } catch (e) {
+    sel.innerHTML = '<option value="">Areas unavailable (offline?)</option>';
+  }
+}
+async function onAreaSelect() {
+  const key = $('#areaSelect').value;
+  if (!key) { setAreaFilter(null); return; }
+  const c = (areaChoices || []).find(x => x.key === key); if (!c) return;
+  try {
+    toast(`Loading ${c.name}…`, 2000);
+    const fc = await (await fetch(`${TIGER_URL}/${c.layer}/query?` + new URLSearchParams({ where: `GEOID='${c.key}'`, outFields: 'BASENAME', returnGeometry: 'true', outSR: '4326', maxAllowableOffset: '0.0002', f: 'geojson' }))).json();
+    if (!fc.features || !fc.features.length) throw new Error('no boundary');
+    setAreaFilter({ key: c.key, name: c.name, kind: c.kind, feature: fc });
+  } catch (e) { toast(`Couldn't load ${c.name}'s boundary right now`, 4000); $('#areaSelect').value = areaFilter ? areaFilter.key : ''; }
+}
+function setAreaFilter(af) {
+  areaFilter = af;
+  areaCache.clear();
+  if (!overlaysReady) setupOverlays();
+  const src = map && map.getSource('ov-area');
+  if (src) src.setData(af ? af.feature : { type: 'FeatureCollection', features: [] });
+  const sel = $('#areaSelect'); if (sel && sel.dataset.filled) sel.value = af ? af.key : '';
+  applyFilters();
+  if (af) {
+    const xs = [], ys = [];
+    JSON.stringify(af.feature.features.map(f => f.geometry.coordinates)).replace(/\[(-?[\d.]+),(-?[\d.]+)\]/g, (_, x, y) => { xs.push(+x); ys.push(+y); });
+    map.fitBounds([[Math.min(...xs), Math.min(...ys)], [Math.max(...xs), Math.max(...ys)]], { padding: { top: 100, bottom: 160, left: 40, right: 60 }, maxZoom: 15 });
   }
 }
 
@@ -921,23 +1020,20 @@ function adjustSearchHit() {
 // CPAD "Units": parcels merged into one outline per park/preserve per owning agency (whole areas, not parcels).
 const CPAD_URL = 'https://services1.arcgis.com/4ZKi1B1zTblbwgWB/ArcGIS/rest/services/cpad_2024a_unitsgdb/FeatureServer/0';
 const TIGER_URL = 'https://tigerweb.geo.census.gov/arcgis/rest/services/TIGERweb/tigerWMS_Current/MapServer';
+// Four groups, chosen by who you'd ask about a shoot permit.
 const LAND_GROUPS = {
-  state:     { label: 'State (incl. State Parks)', color: '#ffe63b' },
-  federal:   { label: 'Federal',                    color: '#ff7a45' },
-  county:    { label: 'County',                     color: '#4fc3f7' },
-  city:      { label: 'City',                       color: '#7ee081' },
-  district:  { label: 'Special district',           color: '#b39ddb' },
-  nonprofit: { label: 'Land trust / nonprofit',     color: '#f48fb1' },
-  private:   { label: 'Private (protected)',        color: '#bdbdbd' },
+  federal:   { label: 'Federal',   color: '#ff7a45' }, // national forest, BLM, national monument, military…
+  state:     { label: 'State',     color: '#ffe63b' }, // State Parks, Fish & Wildlife, other state agencies
+  municipal: { label: 'Municipal', color: '#4fc3f7' }, // city, county, and special districts (e.g. regional parks)
+  private:   { label: 'Private',   color: '#f48fb1' }, // land trusts, nonprofits, private conservation land
 };
+const LEGACY_GROUP = { county: 'municipal', city: 'municipal', district: 'municipal', nonprofit: 'private' };
+const groupKey = g => LAND_GROUPS[g] ? g : (LEGACY_GROUP[g] || 'private');
 function landGroup(layer, lev) {
   const L = String(layer || ''), V = String(lev || '');
-  if (/State|California Department/i.test(L) || V === 'State') return 'state';
   if (/^US |Federal|National Park/i.test(L) || V === 'Federal') return 'federal';
-  if (L === 'County' || V === 'County') return 'county';
-  if (L === 'City' || V === 'City') return 'city';
-  if (/Special District/i.test(L) || /Special District/i.test(V)) return 'district';
-  if (/Non Governmental|Non Profit/i.test(L) || /Non Profit/i.test(V)) return 'nonprofit';
+  if (/State|California Department/i.test(L) || V === 'State') return 'state';
+  if (L === 'County' || V === 'County' || L === 'City' || V === 'City' || /Special District/i.test(L) || /Special District/i.test(V)) return 'municipal';
   return 'private';
 }
 const OVERLAYS = {
@@ -958,12 +1054,15 @@ function setupOverlays() {
   try {
     for (const k of Object.keys(OVERLAYS)) if (!map.getSource('ov-' + k)) map.addSource('ov-' + k, { type: 'geojson', data: empty });
   } catch (e) { console.warn('overlay setup deferred', e); return; }
-  const colorExpr = ['match', ['get', 'grp'], ...Object.entries(LAND_GROUPS).flatMap(([k, v]) => [k, v.color]), '#bdbdbd'];
+  const colorExpr = ['match', ['get', 'grp'], ...Object.entries(LAND_GROUPS).flatMap(([k, v]) => [k, v.color]), LAND_GROUPS.private.color];
   map.addLayer({ id: 'ov-land-fill', type: 'fill', source: 'ov-land', paint: { 'fill-color': colorExpr, 'fill-opacity': 0.2 } });
   map.addLayer({ id: 'ov-land-line', type: 'line', source: 'ov-land', paint: { 'line-color': colorExpr, 'line-width': 1.6, 'line-opacity': 0.95 } });
   map.addLayer({ id: 'ov-counties', type: 'line', source: 'ov-counties', paint: { 'line-color': '#ff5252', 'line-width': 3, 'line-dasharray': [4, 2] } });
   map.addLayer({ id: 'ov-cdps', type: 'line', source: 'ov-cdps', paint: { 'line-color': '#ffffff', 'line-width': 1.8, 'line-dasharray': [2, 2] } });
   map.addLayer({ id: 'ov-cities', type: 'line', source: 'ov-cities', paint: { 'line-color': '#ffffff', 'line-width': 2.6 } });
+  if (!map.getSource('ov-area')) map.addSource('ov-area', { type: 'geojson', data: areaFilter ? areaFilter.feature : empty });
+  map.addLayer({ id: 'ov-area-fill', type: 'fill', source: 'ov-area', paint: { 'fill-color': '#ffe63b', 'fill-opacity': 0.08 } });
+  map.addLayer({ id: 'ov-area-line', type: 'line', source: 'ov-area', paint: { 'line-color': '#ffe63b', 'line-width': 4 } });
   overlaysReady = true;
   applyOverlayVisibility();
   refreshOverlays();
@@ -1020,7 +1119,7 @@ function renderLayersPanel() {
       <button data-base="satellite" class="${baseLayer === 'satellite' ? 'on' : ''}">🛰 Satellite</button>
       <button data-base="streets" class="${baseLayer === 'streets' ? 'on' : ''}">🗺 Streets</button>
     </div>
-    <div class="field-label">Land ownership</div>
+    <div class="field-label">Who owns the land</div>
     ${sw('land')}
     <div class="legend ${overlayOn.land ? '' : 'dim'}">${Object.values(LAND_GROUPS).map(g => `<span><i style="background:${g.color}"></i>${esc(g.label)}</span>`).join('')}</div>
     <div class="field-label">Boundaries</div>
@@ -1068,8 +1167,8 @@ function areaShort(s) {
   return a.city || a.community || (a.county ? 'Unincorp. ' + a.county : '');
 }
 function landLineHtml(l) {
-  const g = LAND_GROUPS[l.grp] || LAND_GROUPS.private;
-  return `<div class="area-land"><i style="background:${g.color}"></i><span><b>${esc(l.name)}</b><br><small>${esc(l.owner)}${l.access ? ' · ' + esc(l.access) : ''}</small></span></div>`;
+  const g = LAND_GROUPS[groupKey(l.grp)];
+  return `<div class="area-land"><i style="background:${g.color}"></i><span><b>${esc(l.name)}</b><br><small><b style="color:${g.color}">${g.label} land</b> · ${esc(l.owner)}${l.access ? ' · ' + esc(l.access) : ''}</small></span></div>`;
 }
 function areaIsCurrent(s) { return !!(s.area && s.area.v === 1); }
 function areaHtml(s) {
@@ -1158,7 +1257,8 @@ function bindUI() {
     const b = e.target.closest('[data-base]'); if (b) return setBaseLayer(b.dataset.base);
   };
   $('#listFilters').onclick = e => { const b = e.target.closest('[data-f]'); if (b) setListFilter(b.dataset.f); };
-  $('#filterPill').onclick = () => setListFilter('all');
+  $('#filterPill').onclick = clearAllFilters;
+  $('#areaSelect').onchange = onAreaSelect;
   $('#btnSearch').onclick = openSearch;
   $('#searchClose').onclick = () => closeSearch();
   $('#searchInput').oninput = onSearchInput;

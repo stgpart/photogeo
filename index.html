@@ -116,7 +116,7 @@
     </div>
     <div id="listFilters" class="filters"></div>
     <label class="area-pick"><span>Area</span><select id="areaSelect"><option value="">All areas</option></select></label>
-    <input id="listSearch" type="search" placeholder="Search spots, notes, parks and towns">
+    <input id="listSearch" type="search" placeholder="Search spots, notes, captions, parks, towns">
     <div id="listItems" class="list"></div>
   </section>
 
@@ -133,9 +133,15 @@
   <!-- Photo viewer -->
   <div id="viewer" class="viewer hidden">
     <button id="viewerClose" class="icon-btn viewer-close" title="Close">✕</button>
-    <div class="viewer-img-wrap"><img id="viewerImg" alt=""></div>
+    <div class="viewer-stage">
+      <div id="viewerTrack" class="viewer-track"></div>
+      <button id="viewerPrev" class="viewer-arrow prev" title="Previous photo">‹</button>
+      <button id="viewerNext" class="viewer-arrow next" title="Next photo">›</button>
+      <div id="viewerCount" class="viewer-count"></div>
+    </div>
     <div class="viewer-info">
-      <button id="viewerLoad" class="btn small primary hidden">Load full size from Google Drive</button>
+      <label class="field-label" for="viewerCaption">Caption</label>
+      <textarea id="viewerCaption" rows="2" maxlength="500" placeholder="Add a caption for this photo…"></textarea>
       <div id="viewerMeta"></div>
       <button id="viewerDelete" class="btn small danger">Delete photo</button>
     </div>

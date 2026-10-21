@@ -18,7 +18,7 @@ const ALLOWED_EMAIL = 'stgp.art@gmail.com';
 const DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive.file';
 const DRIVE_FOLDER_NAME = 'PhotoGeo Images';
 const SAME_SPOT_METERS = 60;           // photos closer than this to a spot can join it
-const THUMB_PX = 400;                  // thumbnail long edge, stored in Firestore
+const THUMB_PX = 720;                  // grid/preview long edge, stored in Firestore (full-size original lives in Drive)
 const DEFAULT_CENTER = [-121.8947, 36.6002]; // Monterey
 const IS_CONFIGURED = !FIREBASE_CONFIG.apiKey.startsWith('REPLACE');
 
@@ -238,30 +238,97 @@ function initMap() {
   map.on('styledata', ready); // earliest point the style is usable
   document.addEventListener('visibilitychange', () => { if (!document.hidden) ready(); });
   map.on('moveend', scheduleOverlayRefresh);
+  map.on('dragstart', () => { if (followMe) { followMe = false; $('#btnLocate').classList.remove('on'); } });
+  startLocationWatch();
   map.on('click', onMapClick);
 }
 
-let userDot = null;
-async function locateMe(announce = true) {
+// ===================== Live location =====================
+// Phones hand back a rough Wi-Fi/cell guess first and only tighten up to real GPS after a few seconds,
+// so we keep a live watch running and always use the freshest, most accurate reading.
+let userDot = null, accSourceAdded = false, geoWatch = null, lastFix = null, followMe = false;
+const GOOD_ACC = 15;      // metres: good enough to pin a photo/spot immediately
+const OK_ACC = 40;        // metres: acceptable after waiting
+function startLocationWatch() {
+  if (geoWatch !== null || !navigator.geolocation) return;
+  geoWatch = navigator.geolocation.watchPosition(onFix, err => {
+    if (err.code === 1) { stopLocationWatch(); toast('Location is blocked for PhotoGeo. Allow it in your browser settings to pin spots where you stand.', 6000); }
+  }, { enableHighAccuracy: true, maximumAge: 0, timeout: 30000 });
+}
+function stopLocationWatch() { if (geoWatch !== null) navigator.geolocation.clearWatch(geoWatch); geoWatch = null; }
+function onFix(pos) {
+  const f = { lat: pos.coords.latitude, lng: pos.coords.longitude, acc: pos.coords.accuracy || 9999, t: pos.timestamp || Date.now() };
+  lastFix = f;
+  drawMe(f);
+  fixWaiters.forEach(w => w(f));
+  if (followMe) map.easeTo({ center: [f.lng, f.lat], duration: 500 });
+}
+function accCircle(f, steps = 48) {
+  const R = 6378137, pts = [];
+  for (let i = 0; i <= steps; i++) {
+    const a = (i / steps) * 2 * Math.PI;
+    const dLat = (f.acc * Math.cos(a)) / R, dLng = (f.acc * Math.sin(a)) / (R * Math.cos(f.lat * Math.PI / 180));
+    pts.push([f.lng + dLng * 180 / Math.PI, f.lat + dLat * 180 / Math.PI]);
+  }
+  return { type: 'FeatureCollection', features: [{ type: 'Feature', properties: {}, geometry: { type: 'Polygon', coordinates: [pts] } }] };
+}
+function drawMe(f) {
+  if (!map) return;
+  if (!userDot) {
+    const el = document.createElement('div'); el.className = 'me-dot';
+    userDot = new maplibregl.Marker({ element: el }).setLngLat([f.lng, f.lat]).addTo(map);
+  } else userDot.setLngLat([f.lng, f.lat]);
+  userDot.getElement().classList.toggle('rough', f.acc > OK_ACC);
   try {
-    const p = await getDevicePosition();
-    map.easeTo({ center: [p.lng, p.lat], zoom: Math.max(map.getZoom(), 14) });
-    if (!userDot) {
-      const el = document.createElement('div'); el.className = 'me-dot';
-      userDot = new maplibregl.Marker({ element: el }).setLngLat([p.lng, p.lat]).addTo(map);
-    } else userDot.setLngLat([p.lng, p.lat]);
+    if (!accSourceAdded && map.style && map.style._loaded) {
+      map.addSource('me-acc', { type: 'geojson', data: accCircle(f) });
+      map.addLayer({ id: 'me-acc', type: 'fill', source: 'me-acc', paint: { 'fill-color': '#4a90ff', 'fill-opacity': 0.15 } });
+      map.addLayer({ id: 'me-acc-line', type: 'line', source: 'me-acc', paint: { 'line-color': '#4a90ff', 'line-width': 1, 'line-opacity': 0.6 } });
+      accSourceAdded = true;
+    } else if (accSourceAdded) map.getSource('me-acc').setData(accCircle(f));
+  } catch (e) { /* style not ready yet; next fix will add it */ }
+  $('#btnLocate small').textContent = f.acc <= 999 ? `±${Math.round(f.acc)} m` : 'Me';
+}
+const fixWaiters = new Set();
+// Best position for pinning: waits (up to ~10s) for GPS to settle instead of taking the first rough guess.
+function getDevicePosition({ maxWait = 10000, onProgress } = {}) {
+  return new Promise((res, rej) => {
+    if (!navigator.geolocation) return rej(new Error('Location not available'));
+    startLocationWatch();
+    let best = (lastFix && Date.now() - lastFix.t < 5000) ? lastFix : null;
+    if (best && best.acc <= GOOD_ACC) return res(best);
+    const done = (f) => { clearTimeout(timer); fixWaiters.delete(w); f ? res(f) : rej(new Error('No location fix')); };
+    const w = f => {
+      if (!best || f.acc < best.acc) best = f;
+      onProgress && onProgress(best);
+      if (best.acc <= GOOD_ACC) done(best);
+    };
+    fixWaiters.add(w);
+    const timer = setTimeout(() => done(best), maxWait);
+    // also nudge a one-off high-accuracy read (some browsers only start GPS this way)
+    navigator.geolocation.getCurrentPosition(pos => w({ lat: pos.coords.latitude, lng: pos.coords.longitude, acc: pos.coords.accuracy || 9999, t: pos.timestamp || Date.now() }),
+      err => { if (err.code === 1) { clearTimeout(timer); fixWaiters.delete(w); rej(err); } }, { enableHighAccuracy: true, maximumAge: 0, timeout: maxWait });
+  });
+}
+async function locateMe(announce = true) {
+  startLocationWatch();
+  if (announce) {
+    followMe = !followMe || !lastFix;
+    $('#btnLocate').classList.toggle('on', followMe);
+    if (followMe) toast('Following your location. Drag the map to stop.', 2500);
+  }
+  try {
+    const p = (lastFix && Date.now() - lastFix.t < 5000) ? lastFix : await getDevicePosition({ maxWait: 6000 });
+    map.easeTo({ center: [p.lng, p.lat], zoom: Math.max(map.getZoom(), 16) });
   } catch (e) {
     if (announce) toast("Couldn't get your location. Check location permission for this site.", 5000);
   }
 }
-
-function getDevicePosition() {
-  return new Promise((res, rej) => {
-    if (!navigator.geolocation) return rej(new Error('Location not available'));
-    navigator.geolocation.getCurrentPosition(
-      p => res({ lat: p.coords.latitude, lng: p.coords.longitude, acc: p.coords.accuracy }),
-      rej, { enableHighAccuracy: true, timeout: 15000, maximumAge: 30000 });
-  });
+async function preciseFixWithToast(purpose) {
+  toast(`Getting a precise location for ${purpose}…`, 12000);
+  const f = await getDevicePosition({ onProgress: b => toast(`Getting a precise location… ±${Math.round(b.acc)} m`, 12000) });
+  toast(`Location ±${Math.round(f.acc)} m`, 2000);
+  return f;
 }
 
 function toggle3D() {
@@ -323,7 +390,8 @@ function renderAll() {
   const v = $('#viewer');
   if (!v.classList.contains('hidden') && v.dataset.pid) {
     const p = photos.get(v.dataset.pid);
-    if (!p) closeViewer(); else $('#viewerMeta').innerHTML = photoMetaHtml(p);
+    if (!p) closeViewer(); else { $('#viewerMeta').innerHTML = photoMetaHtml(p);
+      const cap = $('#viewerCaption'); if (document.activeElement !== cap && cap.dataset.pid === p.id && !captionTimer) { cap.value = p.caption || ''; autoGrow(cap); } if (p.driveId) ensureFull(viewerIndex); }
   }
 }
 
@@ -359,6 +427,7 @@ function renderSpotSheet() {
   $('#spotGrid').innerHTML = list.map(p => `
     <button class="thumb" data-pid="${p.id}">
       <img src="${p.thumb}" alt="" loading="lazy">
+      ${p.caption ? `<span class="thumb-cap">${esc(p.caption)}</span>` : ''}
       <span class="thumb-date">${esc(new Date(p.takenAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: '2-digit' }))}</span>
       ${p.driveStatus !== 'done' ? '<span class="thumb-flag" title="Waiting to save to Google Drive">⏳</span>' : ''}
     </button>`).join('');
@@ -426,7 +495,10 @@ function startPlacing(p) {
     const s = spots.get(p.spotId);
     map.easeTo({ center: [s.lng, s.lat], zoom: Math.max(map.getZoom(), 16) });
     $('#placeText').textContent = `Drag the map to move "${s.name}"`;
-  } else $('#placeText').textContent = 'Drag the map to put the pin on the spot';
+  } else {
+    $('#placeText').textContent = 'Drag the map to put the pin on the spot';
+    if (lastFix && Date.now() - lastFix.t < 15000) map.easeTo({ center: [lastFix.lng, lastFix.lat], zoom: Math.max(map.getZoom(), 18) });
+  }
   document.body.classList.add('placing');
 }
 function stopPlacing() { placing = null; document.body.classList.remove('placing'); }
@@ -522,7 +594,7 @@ async function makeThumb(blob, max) {
     const c = document.createElement('canvas');
     c.width = Math.round(img.naturalWidth * sc); c.height = Math.round(img.naturalHeight * sc);
     c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
-    return c.toDataURL('image/jpeg', 0.72);
+    return c.toDataURL('image/jpeg', 0.82);
   } finally { URL.revokeObjectURL(url); }
 }
 
@@ -542,12 +614,16 @@ async function handleFiles(fileList) {
 
 async function addOnePhoto(file, targetSpotId, batchSpots) {
   const meta = await readPhotoMeta(file);
-  let lat = meta.lat, lng = meta.lng, locSource = 'photo';
+  let lat = meta.lat, lng = meta.lng, locSource = 'photo', locAcc = null;
   if (lat == null) {
     if (targetSpotId && spots.get(targetSpotId)) {
       const s = spots.get(targetSpotId); lat = s.lat; lng = s.lng; locSource = 'spot';
     } else {
-      try { const p = await getDevicePosition(); lat = p.lat; lng = p.lng; locSource = 'device'; }
+      try {
+        const p = await preciseFixWithToast('this photo');
+        lat = p.lat; lng = p.lng; locSource = 'device'; locAcc = Math.round(p.acc);
+        if (p.acc > OK_ACC) toast(`Location is only accurate to about ${Math.round(p.acc)} m here. Check the pin and use ⋯ → Move pin if needed.`, 7000);
+      }
       catch {
         const c = map.getCenter(); lat = c.lat; lng = c.lng; locSource = 'map';
         toast("Couldn't get your location, so the pin is at the map center. Use ⋯ → Move pin to fix it.", 6000);
@@ -582,7 +658,7 @@ async function addOnePhoto(file, targetSpotId, batchSpots) {
 
   const photoId = newId('ph');
   const doc = {
-    spotId, thumb, takenAt, lat, lng, locSource,
+    spotId, thumb, takenAt, lat, lng, locSource, locAcc,
     camera: meta.camera,
     fileName: file.name || 'photo.jpg', mimeType: blob.type, size: blob.size,
     driveId: null, driveStatus: 'pending',
@@ -739,6 +815,7 @@ function fmtShutter(t) {
 function photoMetaHtml(p) {
   const s = spots.get(p.spotId);
   const src = { photo: 'GPS from the photo', device: "Phone's location when added", spot: 'Added to this spot', map: 'Placed by hand' }[p.locSource] || '';
+  const srcAcc = p.locSource === 'device' && p.locAcc ? ` (±${p.locAcc} m)` : '';
   let cam = '';
   if (p.camera) {
     const c = p.camera;
@@ -755,35 +832,134 @@ function photoMetaHtml(p) {
     cam = `<div class="meta-row muted"><span>📷</span><div>No camera settings in this file</div></div>`;
   }
   return `
-    <div class="meta-row"><span>📍</span><div><b>${esc(s ? s.name : '')}</b><br><small>${fmtCoord(p.lat, p.lng)} · ${esc(src)}</small></div></div>
+    <div class="meta-row"><span>📍</span><div><b>${esc(s ? s.name : '')}</b><br><small>${fmtCoord(p.lat, p.lng)} · ${esc(src)}${srcAcc}</small></div></div>
     <div class="meta-row"><span>🕒</span><div>${esc(fmtDate(p.takenAt))}</div></div>
     ${cam}
     <div class="meta-row ${p.driveStatus === 'done' ? '' : 'muted'}"><span>${p.driveStatus === 'done' ? '☁️' : '⏳'}</span><div>${p.driveStatus === 'done' ? 'Saved to Google Drive' : 'Waiting to save to Google Drive (kept on this device)'}</div></div>`;
 }
 
-let viewerUrl = null;
-async function openPhoto(pid) {
+// Carousel viewer: swipe/arrow through every photo of the spot, full-size originals.
+let viewerList = [], viewerIndex = 0, viewerScrollTimer = null;
+const fullUrls = new Map();     // pid -> object URL of the original
+const fullState = new Map();    // pid -> 'loading' | 'full' | 'needs-drive' | 'not-uploaded' | 'unsupported' | 'error'
+function openPhoto(pid) {
   const p = photos.get(pid); if (!p) return;
-  const v = $('#viewer'), img = $('#viewerImg');
-  if (viewerUrl) { URL.revokeObjectURL(viewerUrl); viewerUrl = null; }
-  img.src = p.thumb;
-  $('#viewerMeta').innerHTML = photoMetaHtml(p);
-  $('#viewerLoad').classList.add('hidden');
-  v.dataset.pid = pid;
+  viewerList = spotPhotos(p.spotId).map(x => x.id);
+  viewerIndex = Math.max(0, viewerList.indexOf(pid));
+  // Called straight from the tap, so Google's sign-in popup is allowed if Drive needs reconnecting.
+  const needsDrive = viewerList.some(id => { const q = photos.get(id); return q && q.driveId && !fullUrls.has(id); });
+  if (needsDrive && !hasDriveToken()) {
+    requestDriveToken().then(() => { viewerList.forEach((id, i) => { if (fullState.get(id) === 'needs-drive') fullState.delete(id); }); ensureFull(viewerIndex); flushUploads(); })
+      .catch(() => { /* stays on preview; the slide offers a reconnect button */ });
+  }
+  const track = $('#viewerTrack');
+  track.innerHTML = viewerList.map((id, i) => {
+    const q = photos.get(id);
+    return `<div class="slide" data-i="${i}" data-pid="${id}"><img src="${fullUrls.get(id) || q.thumb}" alt="" draggable="false"><span class="slide-state"></span></div>`;
+  }).join('');
+  const v = $('#viewer');
   v.classList.remove('hidden');
+  v.classList.toggle('single', viewerList.length < 2);
+  requestAnimationFrame(() => { track.scrollLeft = viewerIndex * track.clientWidth; showSlide(viewerIndex); });
+}
+function showSlide(i) {
+  viewerIndex = Math.min(Math.max(i, 0), viewerList.length - 1);
+  const pid = viewerList[viewerIndex], p = photos.get(pid);
+  const v = $('#viewer'); v.dataset.pid = pid;
+  $('#viewerCount').textContent = viewerList.length > 1 ? `${viewerIndex + 1} / ${viewerList.length}` : '';
+  $('#viewerPrev').disabled = viewerIndex === 0;
+  $('#viewerNext').disabled = viewerIndex === viewerList.length - 1;
+  if (p) $('#viewerMeta').innerHTML = photoMetaHtml(p);
+  flushCaption();
+  const cap = $('#viewerCaption');
+  cap.value = (p && p.caption) || ''; cap.dataset.pid = pid;
+  autoGrow(cap);
+  // load this photo first, then its neighbours, so swiping is instant
+  ensureFull(viewerIndex).then(() => { ensureFull(viewerIndex + 1); ensureFull(viewerIndex - 1); });
+  pruneFull();
+}
+function goSlide(i) {
+  const track = $('#viewerTrack');
+  i = Math.min(Math.max(i, 0), viewerList.length - 1);
+  track.scrollTo({ left: i * track.clientWidth, behavior: 'smooth' });
+}
+function onTrackScroll() {
+  clearTimeout(viewerScrollTimer);
+  viewerScrollTimer = setTimeout(() => {
+    const track = $('#viewerTrack');
+    const i = Math.round(track.scrollLeft / Math.max(1, track.clientWidth));
+    if (i !== viewerIndex) showSlide(i);
+  }, 90);
+}
+function slideEl(pid) { return $(`#viewerTrack .slide[data-pid="${pid}"]`); }
+function setSlideState(pid, state, html = '') {
+  fullState.set(pid, state);
+  const el = slideEl(pid); if (!el) return;
+  el.dataset.state = state;
+  el.querySelector('.slide-state').innerHTML = html;
+}
+async function ensureFull(i) {
+  const pid = viewerList[i]; if (!pid) return;
+  const p = photos.get(pid); if (!p) return;
+  const st = fullState.get(pid);
+  if (st === 'loading' || st === 'unsupported') return;
+  if (fullUrls.has(pid)) { const el = slideEl(pid); if (el) { el.querySelector('img').src = fullUrls.get(pid); el.dataset.state = 'full'; el.querySelector('.slide-state').innerHTML = ''; } return; }
+  setSlideState(pid, 'loading', '<span class="ss-pill">Loading full size…</span>');
   try {
     const blob = await getFullImage(p);
-    if (v.dataset.pid !== pid) return;
-    if (blob) { viewerUrl = URL.createObjectURL(blob); img.src = viewerUrl; }
-    else if (p.driveId) $('#viewerLoad').classList.remove('hidden');
+    if (!blob) {
+      if (!p.driveId) setSlideState(pid, 'not-uploaded', '<span class="ss-pill">Preview only. The full-size original is still waiting to upload from the device you added it on.</span>');
+      else setSlideState(pid, 'needs-drive', '<button class="btn small primary ss-connect">Connect Google Drive for full size</button>');
+      return;
+    }
+    const url = URL.createObjectURL(blob);
+    const ok = await new Promise(res => { const im = new Image(); im.onload = () => res(true); im.onerror = () => res(false); im.src = url; });
+    if (!ok) { URL.revokeObjectURL(url); setSlideState(pid, 'unsupported', '<span class="ss-pill">This browser can’t display the original’s format (e.g. HEIC). Showing the preview.</span>'); return; }
+    fullUrls.set(pid, url);
+    const el = slideEl(pid);
+    if (el) el.querySelector('img').src = url;
+    setSlideState(pid, 'full');
   } catch (e) {
-    if (e.status === 401) $('#viewerLoad').classList.remove('hidden');
-    else toast('Full-size image unavailable: ' + (e.message || e), 5000);
+    if (e.status === 401) setSlideState(pid, 'needs-drive', '<button class="btn small primary ss-connect">Reconnect Google Drive for full size</button>');
+    else setSlideState(pid, 'error', '<span class="ss-pill">Couldn’t load the full size (offline?). Showing the preview.</span>');
   }
 }
+function pruneFull() {
+  // keep memory low on phones: only hold originals near the current slide
+  for (const [pid, url] of fullUrls) {
+    const i = viewerList.indexOf(pid);
+    if (i === -1 || Math.abs(i - viewerIndex) > 2) {
+      URL.revokeObjectURL(url); fullUrls.delete(pid); fullState.delete(pid);
+      const el = slideEl(pid); if (el) { const p = photos.get(pid); if (p) el.querySelector('img').src = p.thumb; el.dataset.state = ''; }
+    }
+  }
+}
+// ---- captions (saved per photo, auto-saves as you type) ----
+let captionTimer = null;
+function autoGrow(t) { t.style.height = 'auto'; t.style.height = Math.min(t.scrollHeight, 160) + 'px'; }
+function onCaptionInput() {
+  const t = $('#viewerCaption'); autoGrow(t);
+  clearTimeout(captionTimer);
+  captionTimer = setTimeout(flushCaption, 700);
+}
+function flushCaption() {
+  if (!captionTimer) return;
+  clearTimeout(captionTimer); captionTimer = null;
+  const t = $('#viewerCaption'), pid = t.dataset.pid, p = photos.get(pid);
+  if (!p) return;
+  const caption = t.value.trim();
+  if ((p.caption || '') === caption) return;
+  p.caption = caption;
+  userCol('photos').doc(pid).update({ caption, updatedAt: nowIso() }).catch(e => toast('Caption not saved: ' + e.code, 5000));
+  if (currentSpotId) renderSpotSheet();
+}
 function closeViewer() {
+  flushCaption();
   const v = $('#viewer'); v.classList.add('hidden'); delete v.dataset.pid;
-  if (viewerUrl) { URL.revokeObjectURL(viewerUrl); viewerUrl = null; }
+  for (const url of fullUrls.values()) URL.revokeObjectURL(url);
+  fullUrls.clear(); fullState.clear();
+  $('#viewerTrack').innerHTML = '';
+  viewerList = [];
 }
 async function deleteCurrentPhoto() {
   const pid = $('#viewer').dataset.pid; const p = photos.get(pid); if (!p) return;
@@ -812,7 +988,7 @@ function renderList() {
     `<button class="chip-filter ${listFilter === 'permit' ? 'on' : ''}" data-f="permit">${catBadge('permit', 'p-mini')} Permit needed <small>${all.filter(s => s.permit).length}</small></button>`;
   const arr = all
     .filter(s => !hiddenByFilter(s))
-    .filter(s => !q || s.name.toLowerCase().includes(q) || (s.notes || '').toLowerCase().includes(q) || areaShort(s).toLowerCase().includes(q))
+    .filter(s => !q || s.name.toLowerCase().includes(q) || (s.notes || '').toLowerCase().includes(q) || areaShort(s).toLowerCase().includes(q) || spotPhotos(s.id).some(ph => (ph.caption || '').toLowerCase().includes(q)))
     .sort((a, b) => a.name.localeCompare(b.name));
   $('#listItems').innerHTML = arr.map(s => {
     const ph = spotPhotos(s.id);
@@ -1360,13 +1536,30 @@ function bindUI() {
   $('#spotGrid').onclick = e => { const t = e.target.closest('.thumb'); if (t) openPhoto(t.dataset.pid); };
   $('#viewerClose').onclick = closeViewer;
   $('#viewerDelete').onclick = deleteCurrentPhoto;
-  $('#viewerLoad').onclick = () => {
-    const pid = $('#viewer').dataset.pid;
-    requestDriveToken().then(() => { openPhoto(pid); flushUploads(); }).catch(e => toast('Google Drive connect failed: ' + e.message, 6000));
+  $('#viewerTrack').addEventListener('scroll', onTrackScroll, { passive: true });
+  $('#viewerTrack').onclick = e => {
+    if (!e.target.closest('.ss-connect')) return;
+    requestDriveToken().then(() => { for (const [k, st] of fullState) if (st === 'needs-drive') fullState.delete(k); ensureFull(viewerIndex).then(() => { ensureFull(viewerIndex + 1); ensureFull(viewerIndex - 1); }); flushUploads(); })
+      .catch(err => toast('Google Drive connect failed: ' + err.message, 6000));
   };
+  $('#viewerCaption').addEventListener('input', onCaptionInput);
+  $('#viewerCaption').addEventListener('blur', flushCaption);
+  $('#viewerCaption').addEventListener('keydown', e => e.stopPropagation()); // arrow keys edit text, not change photo
+  $('#viewerPrev').onclick = () => goSlide(viewerIndex - 1);
+  $('#viewerNext').onclick = () => goSlide(viewerIndex + 1);
+  document.addEventListener('keydown', e => {
+    if ($('#viewer').classList.contains('hidden')) return;
+    if (e.key === 'ArrowLeft') goSlide(viewerIndex - 1);
+    else if (e.key === 'ArrowRight') goSlide(viewerIndex + 1);
+    else if (e.key === 'Escape') closeViewer();
+  });
+  window.addEventListener('resize', () => { if (!$('#viewer').classList.contains('hidden')) $('#viewerTrack').scrollLeft = viewerIndex * $('#viewerTrack').clientWidth; });
   $('#bannerBtn').onclick = onBannerTap;
   window.addEventListener('online', () => flushUploads());
-  document.addEventListener('visibilitychange', () => { if (!document.hidden) { updateBanner(); flushUploads(); } });
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) stopLocationWatch();
+    else { updateBanner(); flushUploads(); if (map) startLocationWatch(); }
+  });
 }
 
 function boot() {

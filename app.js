@@ -150,11 +150,18 @@ const CATEGORIES = {
   bathroom: { label: 'Bathroom', plural: 'Bathrooms', badge: 'WC', color: '#00a88f' },
 };
 const catOf = s => (s && CATEGORIES[s.category]) ? s.category : null;
-const catBadge = (c, cls = 'p-badge') => { const i = c === 'permit' ? { badge: '!', color: '#e5484d' } : CATEGORIES[c]; return `<span class="${cls}" style="background:${i.color}">${i.badge}</span>`; };
+const catBadge = (c, cls = 'p-badge') => { const i = c === 'permit' ? { badge: '!', color: '#e5484d' } : c.startsWith('tag:') ? { badge: TAGS[c.slice(4)].icon, color: TAGS[c.slice(4)].color } : CATEGORIES[c]; return `<span class="${cls}" style="background:${i.color}">${i.badge}</span>`; };
 let areaFilter = null;     // null | { key, name, kind, feature } — show only spots inside this city/community
+// Shoot-type tags: a spot can have several. Add more here later (key: { label, color, icon }).
+const TAGS = {
+  proposal: { label: 'Proposal', color: '#ff6fa5', icon: '💍' },
+  water:    { label: 'Water',    color: '#3ec6ff', icon: '🌊' },
+};
+const spotTags = s => (s && Array.isArray(s.tags)) ? s.tags.filter(t => TAGS[t]) : [];
+const tagDots = s => { const t = spotTags(s); return t.length ? `<i class="tag-dots">${t.map(k => `<b style="background:${TAGS[k].color}" title="${TAGS[k].label}"></b>`).join('')}</i>` : ''; };
 const PERMIT_FLAG = { label: 'Permit needed', plural: 'Permit needed', badge: '!', color: '#e5484d' };
-const filterInfo = f => f === 'permit' ? PERMIT_FLAG : CATEGORIES[f];
-const matchesFilter = s => listFilter === 'all' || (listFilter === 'permit' ? !!(s && s.permit) : catOf(s) === listFilter);
+const filterInfo = f => f === 'permit' ? PERMIT_FLAG : f && f.startsWith('tag:') ? { label: TAGS[f.slice(4)].label, plural: TAGS[f.slice(4)].label } : CATEGORIES[f];
+const matchesFilter = s => listFilter === 'all' || (listFilter === 'permit' ? !!(s && s.permit) : listFilter.startsWith('tag:') ? spotTags(s).includes(listFilter.slice(4)) : catOf(s) === listFilter);
 const hiddenByFilter = s => !matchesFilter(s) || (areaFilter && !inArea(s));
 
 // ===================== Firebase / auth =====================
@@ -367,7 +374,7 @@ function renderMarkers() {
   for (const s of spots.values()) {
     const cover = spotPhotos(s.id)[0];
     const cat = catOf(s);
-    const key = `${cover ? cover.id : '-'}|${s.lat}|${s.lng}|${s.name}|${cat}|${!!s.permit}`;
+    const key = `${cover ? cover.id : '-'}|${s.lat}|${s.lng}|${s.name}|${cat}|${!!s.permit}|${spotTags(s).join(',')}`;
     let m = markers.get(s.id);
     if (m && m._pgKey === key) { m.getElement().classList.toggle('filtered-out', hiddenByFilter(s)); continue; }
     if (m) m.remove();
@@ -375,7 +382,7 @@ function renderMarkers() {
     el.className = 'marker' + (cat ? ' cat' : cover ? ' has-photo' : '');
     if (hiddenByFilter(s)) el.classList.add('filtered-out');
     el.title = s.name;
-    el.innerHTML = (s.permit ? '<i class="permit-dot" title="Permit needed">!</i>' : '') + (cat ? catBadge(cat) : cover ? `<img src="${cover.thumb}" alt="">` : '<span>📍</span>');
+    el.innerHTML = (s.permit ? '<i class="permit-dot" title="Permit needed">!</i>' : '') + tagDots(s) + (cat ? catBadge(cat) : cover ? `<img src="${cover.thumb}" alt="">` : '<span>📍</span>');
     el.addEventListener('click', e => { e.stopPropagation(); openSpot(s.id); });
     m = new maplibregl.Marker({ element: el, anchor: 'bottom' }).setLngLat([s.lng, s.lat]).addTo(map);
     m._pgKey = key;
@@ -413,7 +420,8 @@ function renderSpotSheet() {
   $('#spotCoords').textContent = fmtCoord(s.lat, s.lng);
   const sc = catOf(s);
   $('#spotTags').innerHTML = (sc ? `<span class="tag" style="background:${CATEGORIES[sc].color}">${CATEGORIES[sc].badge} ${CATEGORIES[sc].label}</span>` : '') +
-    (s.permit ? `<span class="tag" style="background:${PERMIT_FLAG.color}">! Permit needed</span>` : '');
+    (s.permit ? `<span class="tag" style="background:${PERMIT_FLAG.color}">! Permit needed</span>` : '') +
+    spotTags(s).map(k => `<span class="tag" style="background:${TAGS[k].color};color:#000">${TAGS[k].icon} ${TAGS[k].label}</span>`).join('');
   $('#spotArea').innerHTML = areaHtml(s);
   if (!areaIsCurrent(s)) ensureArea(s);
   $('#spotDirections').href = `https://www.google.com/maps/dir/?api=1&destination=${s.lat},${s.lng}`;
@@ -450,6 +458,7 @@ async function spotMenu() {
     title: s.name, buttons: [
       { label: 'Rename', value: 'rename' },
       ...Object.entries(CATEGORIES).map(([k, c]) => ({ label: s.category === k ? `Unmark as ${c.label.toLowerCase()}` : `Mark as ${c.label.toLowerCase()}`, value: 'cat:' + k })),
+      ...Object.entries(TAGS).map(([k, t]) => ({ label: spotTags(s).includes(k) ? `${t.icon} Remove “${t.label}”` : `${t.icon} Tag as ${t.label}`, value: 'tag:' + k })),
       { label: s.permit ? 'Unmark permit needed' : 'Mark permit needed', value: 'permit' },
       { label: 'Move pin', value: 'move' },
       { label: 'Delete spot', value: 'delete', cls: 'danger' },
@@ -459,6 +468,11 @@ async function spotMenu() {
   if (r.value === 'rename') {
     const n = await dialog({ title: 'Rename spot', input: s.name, buttons: [{ label: 'Cancel', value: false }, { label: 'Save', value: true, cls: 'primary' }] });
     if (n.value && n.text) userCol('spots').doc(s.id).update({ name: n.text, updatedAt: nowIso() });
+  } else if (typeof r.value === 'string' && r.value.startsWith('tag:')) {
+    const k = r.value.slice(4), cur = spotTags(s), on = !cur.includes(k);
+    const tags = on ? [...cur, k] : cur.filter(x => x !== k);
+    userCol('spots').doc(s.id).update({ tags, updatedAt: nowIso() }).catch(e => toast('Not saved: ' + e.code, 5000));
+    toast(on ? `Tagged as ${TAGS[k].label}` : `Removed “${TAGS[k].label}”`);
   } else if (r.value === 'permit') {
     const on = !s.permit;
     userCol('spots').doc(s.id).update({ permit: on, updatedAt: nowIso() }).catch(e => toast('Not saved: ' + e.code, 5000));
@@ -985,10 +999,11 @@ function renderList() {
     `<button class="chip-filter ${listFilter === 'all' ? 'on' : ''}" data-f="all">All <small>${all.length}</small></button>` +
     Object.entries(CATEGORIES).map(([k, c]) =>
       `<button class="chip-filter ${listFilter === k ? 'on' : ''}" data-f="${k}">${catBadge(k, 'p-mini')} ${c.plural} <small>${all.filter(s => s.category === k).length}</small></button>`).join('') +
+    Object.entries(TAGS).map(([k, t]) => `<button class="chip-filter ${listFilter === 'tag:' + k ? 'on' : ''}" data-f="tag:${k}">${t.icon} ${t.label} <small>${all.filter(s => spotTags(s).includes(k)).length}</small></button>`).join('') +
     `<button class="chip-filter ${listFilter === 'permit' ? 'on' : ''}" data-f="permit">${catBadge('permit', 'p-mini')} Permit needed <small>${all.filter(s => s.permit).length}</small></button>`;
   const arr = all
     .filter(s => !hiddenByFilter(s))
-    .filter(s => !q || s.name.toLowerCase().includes(q) || (s.notes || '').toLowerCase().includes(q) || areaShort(s).toLowerCase().includes(q) || spotPhotos(s.id).some(ph => (ph.caption || '').toLowerCase().includes(q)))
+    .filter(s => !q || s.name.toLowerCase().includes(q) || (s.notes || '').toLowerCase().includes(q) || areaShort(s).toLowerCase().includes(q) || spotPhotos(s.id).some(ph => (ph.caption || '').toLowerCase().includes(q)) || spotTags(s).some(k => TAGS[k].label.toLowerCase().includes(q)))
     .sort((a, b) => a.name.localeCompare(b.name));
   $('#listItems').innerHTML = arr.map(s => {
     const ph = spotPhotos(s.id);
@@ -996,13 +1011,13 @@ function renderList() {
     const where = areaShort(s);
     return `<button class="list-row" data-id="${s.id}">
       ${cat ? `<span class="ph-empty ph-cat" style="background:${CATEGORIES[cat].color}">${CATEGORIES[cat].badge}</span>` : ph[0] ? `<img src="${ph[0].thumb}" alt="">` : '<span class="ph-empty">📍</span>'}
-      <span class="lr-text"><b>${s.permit ? '<span class="p-mini" style="background:#e5484d">!</span> ' : ''}${esc(s.name)}</b><small>${where ? esc(where) + ' · ' : ''}${ph.length} photo${ph.length === 1 ? '' : 's'}${s.notes ? ' · ' + esc(s.notes.split('\n')[0].slice(0, 60)) : ''}</small></span>
+      <span class="lr-text"><b>${spotTags(s).map(k => TAGS[k].icon).join('')}${spotTags(s).length ? ' ' : ''}${s.permit ? '<span class="p-mini" style="background:#e5484d">!</span> ' : ''}${esc(s.name)}</b><small>${where ? esc(where) + ' · ' : ''}${ph.length} photo${ph.length === 1 ? '' : 's'}${s.notes ? ' · ' + esc(s.notes.split('\n')[0].slice(0, 60)) : ''}</small></span>
     </button>`;
-  }).join('') || `<p class="empty">${areaFilter && listFilter === 'all' ? `No spots in ${esc(areaFilter.name)} yet.` : listFilter !== 'all' ? `No spots marked “${filterInfo(listFilter).label.toLowerCase()}” yet. Open a spot, tap ⋯ → Mark ${listFilter === 'permit' ? 'permit needed' : 'as ' + filterInfo(listFilter).label.toLowerCase()}.` : spots.size ? 'No matches.' : 'No spots yet. Tap “Add photo” when you’re at a location.'}</p>`;
+  }).join('') || `<p class="empty">${areaFilter && listFilter === 'all' ? `No spots in ${esc(areaFilter.name)} yet.` : listFilter !== 'all' ? `No spots marked “${filterInfo(listFilter).label.toLowerCase()}” yet. Open a spot, tap ⋯ → ${listFilter === 'permit' ? 'Mark permit needed' : listFilter.startsWith('tag:') ? 'Tag as ' + filterInfo(listFilter).label : 'Mark as ' + filterInfo(listFilter).label.toLowerCase()}.` : spots.size ? 'No matches.' : 'No spots yet. Tap “Add photo” when you’re at a location.'}</p>`;
 }
 
 function setListFilter(f) {
-  listFilter = (CATEGORIES[f] || f === 'permit') ? f : 'all';
+  listFilter = (CATEGORIES[f] || f === 'permit' || (f && f.startsWith('tag:') && TAGS[f.slice(4)])) ? f : 'all';
   applyFilters();
   if (listFilter !== 'all') {
     const ps = [...spots.values()].filter(x => !hiddenByFilter(x));
